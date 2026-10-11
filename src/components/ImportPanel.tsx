@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { modelSchema, type ModelSource, type ModelSpec } from "@/lib/config-schema";
-import { convertHfConfig, modelToYaml, type ImportResult } from "@/lib/hf-import";
+import { modelToYaml, type ImportResult } from "@/lib/hf-import";
 import { z } from "zod";
+import { buildImportPreview, type ImportPreview } from "@/lib/import-preview";
 import { usePrefs } from "./Prefs";
 
 const PARAMS_SOURCE: Record<ImportResult["paramsSource"], { fr: string; en: string }> = {
@@ -29,27 +30,21 @@ export function ImportPanel({
   const [source, setSource] = useState("");
   const [params, setParams] = useState("");
   const [active, setActive] = useState("");
-  const [result, setResult] = useState<ImportResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const result = preview?.[lang].result ?? null;
+  const error = preview?.[lang].error ?? validationError;
   const [copied, setCopied] = useState(false);
 
   const convert = (raw = text) => {
     setCopied(false);
-    try {
-      const json = JSON.parse(raw);
-      const r = convertHfConfig(json, {
-        source: source.trim() || undefined,
-        paramsB: params ? Number(params) : undefined,
-        activeParamsB: active ? Number(active) : undefined,
-        lang,
-      });
-      if (existingIds.has(r.model.id)) r.model.id = `${r.model.id}-import`;
-      setResult(r);
-      setError(null);
-    } catch (e) {
-      setResult(null);
-      setError((e as Error).message);
-    }
+    setValidationError(null);
+    // Store both translations of this submission; switching language must not submit pending edits.
+    setPreview(buildImportPreview(raw, {
+      source: source.trim() || undefined,
+      paramsB: params ? Number(params) : undefined,
+      activeParamsB: active ? Number(active) : undefined,
+    }, existingIds));
   };
 
   const onFile = async (f: File | undefined) => {
@@ -64,7 +59,7 @@ export function ImportPanel({
     if (!result) return;
     const parsed = modelSchema.safeParse(result.model);
     if (!parsed.success) {
-      setError(z.prettifyError(parsed.error));
+      setValidationError(z.prettifyError(parsed.error));
       return;
     }
     onAdd(parsed.data);

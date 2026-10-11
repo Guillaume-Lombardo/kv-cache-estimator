@@ -27,11 +27,25 @@ export type Translate = ReturnType<typeof tr>;
 
 /** Language from an Accept-Language header, French when nothing matches. */
 export function langFromAcceptLanguage(header: string | null | undefined): Lang {
+  let selected: Lang = DEFAULT_LANG;
+  let bestQuality = 0;
   for (const part of (header ?? "").split(",")) {
-    const code = part.trim().slice(0, 2).toLowerCase();
-    if (isLang(code)) return code;
+    const [range, ...parameters] = part.trim().toLowerCase().split(";");
+    if (!/^[a-z]{1,8}(?:-[a-z0-9]{1,8})*$/.test(range)) continue;
+    const code = range.split("-")[0];
+    if (!isLang(code)) continue;
+    const qualityParameter = parameters.find((p) => /^q\s*=/.test(p.trim()));
+    const qualityText = qualityParameter?.split("=")[1]?.trim() ?? "1";
+    // Reject malformed quality values rather than treating them as preferred.
+    if (!/^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(qualityText)) continue;
+    const quality = Number(qualityText);
+    // A strict comparison preserves header order for equal weights and excludes q=0.
+    if (quality > bestQuality) {
+      selected = code;
+      bestQuality = quality;
+    }
   }
-  return DEFAULT_LANG;
+  return selected;
 }
 
 /** Per-language text, as accepted in the configuration file. */

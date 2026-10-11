@@ -46,4 +46,19 @@ describe("i18n", async () => {
     expect(langFromAcceptLanguage("de-DE,fr;q=0.5")).toBe("fr");
     expect(langFromAcceptLanguage(undefined)).toBe("fr");
   });
+  it.each([
+    ["fr;q=0,en;q=1", "en"],
+    ["fr;q=0.1,en;q=0.9", "en"],
+    ["en;q=0.4,fr;q=0.9", "fr"],
+    ["en;q=0.8,fr;q=0.8", "en"],
+    ["fr;q=0.8,en;q=0.8", "fr"],
+    ["FR-ca;q=0.2,EN-gb;q=0.7", "en"],
+    ["english,fr;q=0.5", "fr"],
+    ["fr;q=bogus,en;q=0.5", "en"],
+    ["fr;q=1.1,en;q=0.5", "en"],
+    ["de-DE,*;q=0.5", "fr"],
+  ])("negotiates %s as %s", (header, expected) => {
+    expect(langFromAcceptLanguage(header)).toBe(expected);
+  });
+
 });
