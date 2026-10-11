@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
-import { catalogSchema } from '../lib/schema';
+import { parseCatalog } from '../lib/parse-catalog';
 const file = process.argv[2] || process.env.ESTIMATOR_CONFIG || 'config/catalog.json';
-const result = catalogSchema.safeParse(JSON.parse(readFileSync(file, 'utf8')));
-if (!result.success) { console.error(result.error.issues); process.exit(1); }
-console.log(`Configuration valide : ${result.data.models.length} modèles, ${result.data.gpus.length} GPU.`);
+try {
+  const data = parseCatalog(readFileSync(file, 'utf8'), file);
+  console.log(`Configuration valide : ${data.models.length} modèles, ${data.gpus.length} GPU.`);
+} catch (error) {
+  console.error(`Configuration invalide (${file}): ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}

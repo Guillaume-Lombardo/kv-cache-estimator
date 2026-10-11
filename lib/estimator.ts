@@ -79,6 +79,7 @@ export function estimate(model: Model, gpu: GPU, s: Settings) {
   const kvPerSession = parts.reduce((a, p) => a + p.physicalGiB, 0);
   const memorySessions = kvPerSession > 0 ? Math.floor(available / kvPerSession) : 0;
   if (memorySessions === 0 && weights <= total - reserved && kvPerSession > 0) add('error', 'Mémoire insuffisante pour une session au contexte choisi.');
+  notices.sort((a, b) => ({ error: 0, warning: 1, info: 2 })[a.level] - ({ error: 0, warning: 1, info: 2 })[b.level]);
   const compatible = !notices.some(n => n.level === 'error');
   return { rawWeights, weights, total, reserved, available, logicalKV, kvPerSession, modelAndKV: weights + kvPerSession, parts, memorySessions, sessions: compatible ? memorySessions : 0, compatible, notices };
 }

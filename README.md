@@ -22,7 +22,7 @@ npm start
 
 ## Charger son catalogue avant le lancement
 
-Le fichier par défaut est `config/catalog.json`. Pour le remplacer, définir `ESTIMATOR_CONFIG` avant de démarrer le serveur. Le fichier est lu et validé au démarrage des workers Node, puis conservé en mémoire. Redémarrer après modification. Aucune configuration n’est envoyée par le navigateur et aucune URL distante n’est chargée comme configuration.
+Le fichier par défaut est `config/catalog.json`. Les fichiers `.yaml` et `.yml` sont aussi acceptés, avec le même schéma. Pour le remplacer, définir `ESTIMATOR_CONFIG` avant de démarrer le serveur. Le fichier est lu et validé au démarrage des workers Node, puis conservé en mémoire. Redémarrer après modification. Aucune configuration n’est envoyée par le navigateur et aucune URL distante n’est chargée comme configuration.
 
 Linux / macOS :
 
@@ -50,11 +50,12 @@ npm run validate:config -- /chemin/catalog.json
 
 ## Ce que l’application affiche
 
-- Recherche textuelle et sélection du modèle.
+- Champ de recherche et sélection intégré, filtrable par nom, famille et architecture, avec navigation au clavier.
 - Contexte : 8k, 16k, 32k, 64k, 128k, 256k, 512k et 1M tokens. Les multiples sont binaires : 8k = 8 192 et 1M = 1 048 576.
 - GPU, nombre de GPU, interconnexion, format des poids, format du KV cache et réserve par GPU.
 - Poids bruts et estimés, cache logique et cache physique par session, modèle + une session, mémoire restante pour les caches et nombre de sessions complètes.
-- Décomposition mémoire, comparaison des huit contextes et export JSON d’un scénario.
+- Décomposition mémoire globale et par GPU, comparaison des huit contextes et export JSON d’un scénario.
+- Scénario conservé dans l’URL et bouton de partage. Tous les réglages sont inclus, y compris la VRAM mesurée et les surcoûts. Le destinataire doit utiliser le même catalogue. Les paramètres invalides sont remplacés par des valeurs valides.
 - Options incompatibles grisées, formats conditionnels marqués `*`, avertissements détaillés et sources consultables.
 
 Le curseur permet de dépasser le contexte publié pour voir son coût mémoire. Dans ce cas, la configuration n’est pas validée et le nombre de sessions utilisables est zéro. La limite n’est jamais étendue silencieusement avec RoPE ou YaRN.
@@ -168,7 +169,7 @@ Exemple de blocs pour Mistral Small 3.2 :
 
 Les champs `weightFormats` et `kvFormats` définissent les formats autorisés par le modèle. Chaque GPU contient une entrée `weights` / `kv` pour chaque format, avec `status` (`native`, `conditional`, `unsupported`) et `reason`. Des restrictions propres à une version de moteur peuvent ainsi être imposées dans un catalogue interne sans modifier l’interface.
 
-La validation refuse les identifiants dupliqués, dimensions négatives, champs manquants, URL non HTTPS et modèles calculables sans blocs de cache.
+La validation est stricte : les clés inconnues ou mal orthographiées sont rejetées, y compris dans les objets imbriqués. Elle refuse les clés YAML dupliquées, les identifiants dupliqués, dimensions négatives, champs manquants, URL non HTTPS et modèles calculables sans blocs de cache.
 
 ## Tests et structure
 
@@ -179,7 +180,7 @@ npm run typecheck
 npm run build
 ```
 
-Les tests vérifient des résultats numériques connus, les fenêtres glissantes, la réplication TP, le MLA, les états fixes, les limites, les configurations invalides et 9 216 combinaisons modèle/GPU/contexte/nombre de GPU. La compilation de production a été vérifiée. La vérification visuelle et les interactions dans un navigateur restent à réaliser dans un environnement qui le permet.
+Les 18 tests vérifient le partage des scénarios et les URL invalides, l’équivalence JSON/YAML, la validation stricte, des résultats numériques connus, les fenêtres glissantes, la réplication TP, le MLA, les états fixes, les limites, les configurations invalides et 9 216 combinaisons modèle/GPU/contexte/nombre de GPU. La compilation de production a été vérifiée. La vérification visuelle et les interactions dans un navigateur restent à réaliser dans un environnement qui le permet.
 
 ```text
 app/                  Interface et styles
@@ -197,3 +198,9 @@ tests/                Tests du calcul et du schéma
 - Importer la VRAM réellement disponible et les mesures de cache de vLLM/SGLang pour calibrer les hypothèses.
 - Ajouter des profils versionnés de moteurs et une gestion explicite TP × PP × EP.
 - Comparer côte à côte plusieurs scénarios et produire un plan de capacité à partir de longueurs de sessions différentes.
+
+## Comparaison avec la branche Claude
+
+La branche `claude/great-dijkstra-9wcc65` (commit `b6794fe`) a servi de référence pour le sélecteur intégré, le partage par URL, YAML, la validation stricte, l’affichage par GPU et la priorité des avertissements. Ces idées ont été adaptées à notre schéma de configuration et à notre calcul.
+
+Les modes PP et DP-attention de cette branche ne sont pas repris tels quels. Le PP calcule sur une moyenne des couches, qui peut masquer le GPU limitant. Le calcul DP-attention peut omettre des poids d’attention MLA ou linéaire. Un plan de placement explicite est nécessaire pour estimer leur capacité sans surestimation. Le catalogue vérifié de cette PR reste la référence ; les architectures signalées comme non vérifiées dans l’autre branche ne le remplacent pas.

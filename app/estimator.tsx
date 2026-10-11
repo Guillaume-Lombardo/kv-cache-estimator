@@ -1,6 +1,8 @@
 'use client';
-import { useState } from 'react';
-import { Cpu, Database, Layers3, SlidersHorizontal, ArrowUpRight, Download, Info, TriangleAlert, Check, ChevronDown, Search, CircuitBoard, Gauge, ExternalLink } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import ModelCombobox from './model-combobox';
+import { readScenario, writeScenario } from '@/lib/scenario';
+import { Cpu, Database, Layers3, SlidersHorizontal, ArrowUpRight, Download, Info, TriangleAlert, Check, ChevronDown, Link2, CircuitBoard, Gauge, ExternalLink } from 'lucide-react';
 import type { Catalog, WeightFormat, KVFormat } from '@/lib/schema';
 import { CONTEXTS, estimate, WEIGHT_FORMATS, KV_FORMATS, type Settings } from '@/lib/estimator';
 const number = (n: number, digits = 1) => n.toLocaleString('fr-FR', { maximumFractionDigits: digits, minimumFractionDigits: digits });
@@ -13,13 +15,36 @@ export default function Estimator({ catalog }: { catalog: Catalog }) {
   const chooseKV = (m: typeof first, g: typeof initialGPU) => (['bf16', 'fp16', 'fp8', 'int8', 'int4'] as const).find(f => m.kvFormats.includes(f) && g.kv[f].status !== 'unsupported') || m.kvFormats[0];
   const [modelId, setModelId] = useState(first.id);
   const [gpuId, setGpuId] = useState(initialGPU.id);
-  const [search, setSearch] = useState('');
+  const [ready, setReady] = useState(false);
   const [message, setMessage] = useState('');
   const [settings, setSettings] = useState<Settings>({ context: 32768, gpuCount: 1, weight: chooseWeight(first, initialGPU), kv: chooseKV(first, initialGPU), reserveGiB: 8, memoryGiB: initialGPU.memoryGiB, weightOverhead: WEIGHT_FORMATS[chooseWeight(first, initialGPU)].overhead * 100, interconnect: initialGPU.interconnects.includes('nvlink') ? 'nvlink' : 'pcie', sliding: true, parallelism: 'tp' });
   const model = catalog.models.find(m => m.id === modelId)!;
   const gpu = catalog.gpus.find(g => g.id === gpuId)!;
   const result = estimate(model, gpu, settings);
-  const filtered = catalog.models.filter(m => `${m.name} ${m.family} ${m.id}`.toLowerCase().includes(search.toLowerCase()));
+  useEffect(() => {
+    const fallback = { modelId, gpuId, settings };
+    const restore = () => {
+      const restored = readScenario(new URLSearchParams(window.location.search), catalog, fallback);
+      setModelId(restored.modelId); setGpuId(restored.gpuId); setSettings(restored.settings); setReady(true);
+    };
+    restore();
+    window.addEventListener('popstate', restore);
+    return () => window.removeEventListener('popstate', restore);
+    // The initial defaults are the fallback for invalid/missing URL fields.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalog]);
+  useEffect(() => {
+    if (!ready) return;
+    const url = new URL(window.location.href);
+    url.search = writeScenario({ modelId, gpuId, settings }).toString();
+    window.history.replaceState(window.history.state, '', url);
+  }, [ready, modelId, gpuId, settings]);
+  async function shareScenario() {
+    const url = new URL(window.location.href);
+    url.search = writeScenario({ modelId, gpuId, settings }).toString();
+    try { await navigator.clipboard.writeText(url.href); setMessage('Lien du scénario copié. Le destinataire doit utiliser le même catalogue.'); }
+    catch { setMessage('Copiez l’adresse dans la barre du navigateur : elle contient le scénario.'); }
+  }
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => setSettings(s => ({ ...s, [key]: value }));
   function switchSelection(id: string, kind: 'model' | 'gpu') {
     const m = kind === 'model' ? catalog.models.find(v => v.id === id)! : model;
@@ -41,16 +66,12 @@ export default function Estimator({ catalog }: { catalog: Catalog }) {
   return <>
     <header className="topbar"><a className="brand" href="/" aria-label="KV Lab accueil"><span className="brand-mark"><Layers3 size={21}/></span><strong>KV<span>LAB</span></strong><span className="brand-divider"/><span className="brand-description">LLM memory planner</span></a><div className="top-meta"><span className="status-dot"/>Calcul local <span className="version">v1.0</span><a href="https://github.com/Guillaume-Lombardo/kv-cache-estimator" target="_blank" rel="noreferrer" aria-label="Dépôt GitHub"><ArrowUpRight size={19}/></a></div></header>
     <main className="workspace">
-      <section className="intro"><div><div className="eyebrow">INFÉRENCE / DIMENSIONNEMENT</div><h1>Combien de mémoire<br className="mobile-break"/> pour votre modèle ?</h1><p>Explorez le coût des poids et du KV cache, avant de réserver vos GPU.</p></div><button className="export" onClick={exportResult}><Download size={16}/>Exporter le calcul</button></section>
+      <section className="intro"><div><div className="eyebrow">INFÉRENCE / DIMENSIONNEMENT</div><h1>Combien de mémoire<br className="mobile-break"/> pour votre modèle ?</h1><p>Explorez le coût des poids et du KV cache, avant de réserver vos GPU.</p></div><div className="intro-actions"><button className="export" onClick={shareScenario} disabled={!ready}><Link2 size={16}/>Partager</button><button className="export" onClick={exportResult}><Download size={16}/>Exporter le calcul</button></div></section>
       <div className="dashboard">
         <aside className="panel controls" aria-label="Paramètres de simulation">
           <div className="panel-heading"><SlidersHorizontal size={17}/><h2>Configuration</h2><span className="small-tag">LIVE</span></div>
           <div className="control-section"><div className="section-label"><span>01</span>MODÈLE</div>
-            <label htmlFor="model-search">Rechercher un modèle</label><div className="search-wrap"><Search size={15}/><input id="model-search" type="search" placeholder="Mistral, Gemma, Qwen…" value={search} onChange={e => setSearch(e.target.value)}/></div>
-            <label className="sr-only" htmlFor="model">Modèle sélectionné</label><select id="model" value={modelId} onChange={e => switchSelection(e.target.value, 'model')}>
-              {!filtered.some(m => m.id === modelId) && <option value={modelId}>{label(model.name)} · sélection actuelle</option>}
-              {Array.from(new Set(filtered.map(m => m.family))).map(f => <optgroup label={f} key={f}>{filtered.filter(m => m.family === f).map(m => <option key={m.id} value={m.id} disabled={m.status === 'unavailable'}>{label(m.name)}{m.status === 'unavailable' ? ' — non publié' : m.status === 'experimental' ? ' †' : ''}</option>)}</optgroup>)}
-            </select><div className="field-hint">{filtered.length} résultat{filtered.length > 1 ? 's' : ''} · † architecture hybride estimée</div>
+            <ModelCombobox models={catalog.models} value={modelId} onChange={id => switchSelection(id, 'model')}/>
             <div className="model-chips"><span>{number(model.parameters / 1e9, 1)}B paramètres</span><span>{model.architecture}</span></div>
             <div className="label-row"><label htmlFor="context">Fenêtre de contexte</label><strong>{tokens(settings.context)} <small>tokens</small></strong></div>
             <input id="context" type="range" min="0" max="7" step="1" value={CONTEXTS.indexOf(settings.context)} aria-valuetext={`${settings.context} tokens`} onChange={e => set('context', CONTEXTS[+e.target.value])}/>
@@ -67,6 +88,7 @@ export default function Estimator({ catalog }: { catalog: Catalog }) {
             <div className="two-fields"><div><label htmlFor="weight">Poids</label><select id="weight" value={settings.weight} onChange={e => { const w = e.target.value as WeightFormat; setSettings(s => ({ ...s, weight: w, weightOverhead: WEIGHT_FORMATS[w].overhead * 100 })); }}>{Object.entries(WEIGHT_FORMATS).map(([id, f]) => <option key={id} value={id} disabled={gpu.weights[id as WeightFormat].status === 'unsupported' || !model.weightFormats.includes(id as WeightFormat)}>{f.label}{gpu.weights[id as WeightFormat].status === 'unsupported' ? ' ×' : gpu.weights[id as WeightFormat].status === 'conditional' ? ' *' : ''}</option>)}</select></div>
             <div><label htmlFor="kv">KV cache</label><select id="kv" value={settings.kv} onChange={e => set('kv', e.target.value as KVFormat)}>{Object.entries(KV_FORMATS).map(([id, f]) => <option key={id} value={id} disabled={gpu.kv[id as KVFormat].status === 'unsupported' || !model.kvFormats.includes(id as KVFormat)}>{f.label}{gpu.kv[id as KVFormat].status === 'unsupported' ? ' ×' : gpu.kv[id as KVFormat].status === 'conditional' ? ' *' : ''}</option>)}</select></div></div>
             <div className="field-hint">* dépend du moteur / checkpoint · × exclu du profil.</div>
+            <details className="format-reasons"><summary>Pourquoi certains formats sont-ils limités ?</summary>{(['weights', 'kv'] as const).map(kind => <div key={kind}><strong>{kind === 'weights' ? 'Poids' : 'KV cache'}</strong>{Object.entries(gpu[kind]).filter(([, v]) => v.status !== 'native').map(([f, v]) => <p key={f}><b>{f.toUpperCase()} · {v.status === 'unsupported' ? 'exclu' : 'conditionnel'}</b> : {v.reason}</p>)}</div>)}</details>
             <div className="label-row"><label htmlFor="reserve">Réserve par GPU</label><div className="number-unit"><input id="reserve" type="number" min="0" max="1024" step="1" value={settings.reserveGiB} onChange={e => set('reserveGiB', Math.max(0, Math.min(1024, Number(e.target.value) || 0)))}/><span>Gio</span></div></div>
             <div className="field-hint">Activations, CUDA graphs, buffers et fragmentation. Valeur de départ : 8 Gio, à mesurer sur votre charge.</div>
             <details className="advanced"><summary>Réglages avancés <ChevronDown size={14}/></summary><div>
@@ -85,6 +107,7 @@ export default function Estimator({ catalog }: { catalog: Catalog }) {
             <Metric icon={<Database size={16}/>} title="Cache / session" value={result.kvPerSession} note={`${number(result.logicalKV)} Gio logiques · réplications incluses`}/>
             <Metric icon={<Cpu size={16}/>} title="Modèle + 1 session" value={result.modelAndKV} note="Somme sur les GPU · hors réserve"/>
           </section>
+          <section className="per-gpu" aria-label="Répartition mémoire par GPU"><div className="per-gpu-title">Par GPU <small>répartition supposée du mode sélectionné</small></div><dl><div><dt>Poids</dt><dd>{number(result.weights / settings.gpuCount)} Gio</dd></div><div><dt>Cache / session</dt><dd>{number(result.kvPerSession / settings.gpuCount)} Gio</dd></div><div><dt>Réserve</dt><dd>{number(settings.reserveGiB)} Gio</dd></div><div><dt>Budget caches</dt><dd>{number(result.available / settings.gpuCount)} Gio</dd></div></dl></section>
           <section className="panel capacity-panel"><div className="capacity-main"><div className="capacity-label"><span className="eyebrow">CAPACITÉ À CONTEXTE PLEIN</span><div className="session-value">{number(result.sessions, 0)}<span>session{result.sessions === 1 ? '' : 's'}</span></div><p>{result.compatible ? 'Borne mémoire, sans garantie de débit ou de latence.' : 'Capacité non validée : voir les points de vigilance.'}</p></div><div className="available"><Database size={20}/><span>Budget total pour les caches</span><strong>{number(result.available)} <small>Gio</small></strong><span>après poids et réserve</span></div></div>
             <div className="budget-head"><span>Répartition avec une session</span><strong>{number(result.total)} Gio disponibles sur {settings.gpuCount} GPU</strong></div>
             <div className="memory-bar" role="img" aria-label={`Poids ${number(result.weights)} Gio ; caches ${number(result.kvPerSession)} Gio ; réserve ${number(result.reserved)} Gio ; libre ${number(freeAfterOne)} Gio ; dépassement ${number(over)} Gio`}>{segments.map(p => <div key={p.cls} className={p.cls} style={{ width: `${p.value / plotTotal * 100}%` }}/ >)}{freeAfterOne > 0 && <div className="free" style={{ width: `${freeAfterOne / plotTotal * 100}%` }}/>}</div>
