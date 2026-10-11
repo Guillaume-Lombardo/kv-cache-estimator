@@ -1,4 +1,4 @@
-import { CONTEXT_STEPS, isMoE, type EstimateInput, type ParallelMode } from "./calc";
+import { CONTEXT_STEPS, isMoE, memoryFormatFor, type EstimateInput, type ParallelMode } from "./calc";
 import type { AppConfig, ModelSpec } from "./config-schema";
 import { defaultTp, divisors, gpuCountOptions, pickKvFormat, pickWeightFormat } from "./planning";
 
@@ -40,7 +40,7 @@ export function scenarioFromQuery(cfg: AppConfig, models: ModelSpec[], q: QueryP
   const gpuCount = nq !== undefined && counts.includes(nq) ? nq : counts.includes(d.gpuCount ?? 1) ? (d.gpuCount ?? 1) : 1;
   // Compatibilité : anciens liens ?p=tp|pp|dp-attention
   let mode: ParallelMode = q.mode === "dp-ep" || q.p === "dp-attention" ? "dp-ep" : "tp-pp";
-  if (mode === "dp-ep" && (!isMoE(model) || !engine.features.dpAttention)) mode = "tp-pp";
+  if (mode === "dp-ep" && (!isMoE(model) || engine.features.dpAttention === false)) mode = "tp-pp";
   const tpq = numParam(q.tp) ?? (q.p === "pp" ? 1 : q.p === "tp" ? gpuCount : undefined);
   const tp = tpq !== undefined && divisors(gpuCount).includes(tpq) ? tpq : defaultTp(model, gpu, gpuCount);
   const r = numParam(q.r);
@@ -97,6 +97,7 @@ export function resolveScenario(cfg: AppConfig, models: ModelSpec[], s: Scenario
     tp: s.tp,
     contextTokens: s.ctx,
     weightFormat,
+    memoryWeightFormat: memoryFormatFor(cfg.weightFormats, gpu, engine, weightFormat),
     kvFormat,
     reservePct: s.reservePct,
     memoryGiBOverride: s.memGiB,

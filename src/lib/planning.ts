@@ -5,6 +5,7 @@ import {
   isMoE,
   isValidTp,
   kvSupport,
+  memoryFormatFor,
   weightSupport,
   type EstimateInput,
   type ParallelMode,
@@ -93,18 +94,22 @@ export function sizeForTarget(
       const configs: { mode: ParallelMode; tp: number }[] = divisors(n)
         .filter((d) => d <= maxTp(gpu) && isValidTp(base.model, d))
         .map((tp) => ({ mode: "tp-pp" as const, tp }));
-      if (n > 1 && isMoE(base.model) && base.engine.features.dpAttention) configs.push({ mode: "dp-ep", tp: 1 });
+      if (n > 1 && isMoE(base.model) && base.engine.features.dpAttention !== false) configs.push({ mode: "dp-ep", tp: 1 });
       // Parmi les configurations qui atteignent l'objectif, on garde celle au meilleur débit agrégé
       // (mesuré à l'objectif, pas à pleine charge).
-      let best: { input: EstimateInput; sessions: number; rate: number } | null = null;
+      let best: { input: EstimateInput; sessions: number; rate: number; score: number; unverified: boolean } | null = null;
       for (const c of configs) {
-        const input: EstimateInput = { ...base, gpu, gpuCount: n, mode: c.mode, tp: c.tp, weightFormat, kvFormat };
+        const memoryWeightFormat = memoryFormatFor(cfg.weightFormats, gpu, base.engine, weightFormat);
+        const input: EstimateInput = { ...base, gpu, gpuCount: n, mode: c.mode, tp: c.tp, weightFormat, memoryWeightFormat, kvFormat };
         const est = estimate(input);
         if (est.sessions < targetSessions) continue;
-        const blocking = collectIssues(input, est, cfg.weightFormats).some((i) => i.severity === "error" && !i.title.startsWith("Contexte"));
-        if (blocking) continue;
+        const issues = collectIssues(input, est, cfg.weightFormats);
+        if (issues.some((i) => i.severity === "error" && !i.title.startsWith("Contexte"))) continue;
+        // Une configuration qui repose sur une capacité non vérifiée passe après les configurations vérifiées.
+        const unverified = issues.some((i) => /(non vérifié|non vérifiée)/.test(i.title) && /(parallel|DP-attention)/i.test(i.title));
         const rate = estimatePerf(input, est, cfg.performance).at(targetSessions).tokPerSecTotal;
-        if (!best || rate > best.rate) best = { input, sessions: est.sessions, rate };
+        const score = unverified ? rate / 1e6 : rate;
+        if (!best || score > best.score) best = { input, sessions: est.sessions, rate, score, unverified };
       }
       if (best) {
         found = {
@@ -116,7 +121,7 @@ export function sizeForTarget(
           weightFormat: wfId,
           kvFormat: kfId,
           tokPerSecTotal: best.rate,
-          note: notes.join(", ") || undefined,
+          note: [...notes, ...(best.unverified ? ["parallélisme non vérifié"] : [])].join(", ") || undefined,
         };
         break;
       }

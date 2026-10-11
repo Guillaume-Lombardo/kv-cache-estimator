@@ -1,16 +1,28 @@
 import { z } from "zod";
 
-/** Niveau de support d'un format sur un GPU ou dans un moteur. */
-export const SUPPORT_LEVELS = ["native", "limited", "unsupported"] as const;
+/**
+ * Niveau de support d'un format sur un GPU ou dans un moteur.
+ * unverified : aucune source ne confirme ni n'infirme le support (sélectionnable, signalé).
+ */
+export const SUPPORT_LEVELS = ["native", "limited", "unverified", "unsupported"] as const;
 export type SupportLevel = (typeof SUPPORT_LEVELS)[number];
 
 const supportSchema = z
   .union([
     z.enum(SUPPORT_LEVELS),
-    z.strictObject({ level: z.enum(SUPPORT_LEVELS), note: z.string().optional() }),
+    z.strictObject({
+      level: z.enum(SUPPORT_LEVELS),
+      note: z.string().optional(),
+      /** Format effectif en mémoire GPU si le moteur ne garde pas le format du fichier (ex. FP8 déquantifié en BF16). */
+      memoryFormat: z.string().optional(),
+    }),
   ])
-  .transform((v) => (typeof v === "string" ? { level: v } : v));
+  .transform((v): { level: SupportLevel; note?: string; memoryFormat?: string } => (typeof v === "string" ? { level: v } : v));
 export type Support = z.output<typeof supportSchema>;
+
+/** Capacité d'un moteur : oui, non, ou non vérifiée faute de source. */
+const capabilitySchema = z.union([z.boolean(), z.literal("unverified")]);
+export type Capability = z.output<typeof capabilitySchema>;
 
 const weightFormatSchema = z.strictObject({
   id: z.string(),
@@ -71,14 +83,29 @@ const engineSchema = z.strictObject({
   name: z.string(),
   description: z.string().optional(),
   confidence: z.enum(["high", "medium", "low"]).default("high"),
+  /** Version ou révision à laquelle le profil se rapporte. */
+  version: z.string().optional(),
   features: z.strictObject({
-    /** Les couches à fenêtre glissante n'allouent que la fenêtre. */
-    slidingWindowOptimized: z.boolean(),
-    /** DP-attention + expert parallel disponible. */
-    dpAttention: z.boolean(),
+    /** KV paginé (PagedAttention) : blocs alloués à la demande. */
+    kvPaging: capabilitySchema,
+    /** Pool de KV préalloué sur le GPU au démarrage (peut coexister avec la pagination). */
+    kvPoolPreallocated: capabilitySchema,
+    prefixCaching: capabilitySchema,
+    continuousBatching: capabilitySchema,
+    /** Les noyaux d'attention appliquent la fenêtre glissante (résultat correct). */
+    slidingWindowAttention: capabilitySchema,
+    /** Les blocs KV sortis de la fenêtre sont libérés : condition de l'économie de VRAM. */
+    slidingWindowFreesBlocks: capabilitySchema,
+    tensorParallel: capabilitySchema,
+    pipelineParallel: capabilitySchema,
+    /** DP-attention + expert parallel. */
+    dpAttention: capabilitySchema,
     /** Déchargement du KV vers la mémoire CPU. */
-    kvOffload: z.boolean(),
+    kvOffload: capabilitySchema,
   }),
+  /** Précisions ou sources par capacité. */
+  featureNotes: z.record(z.string(), z.string()).default({}),
+  sources: z.array(z.strictObject({ label: z.string(), url: z.string() })).default([]),
   /** Absent = non supporté par le moteur. */
   weightFormats: z.record(z.string(), supportSchema),
   kvCacheFormats: z.record(z.string(), supportSchema),
@@ -234,6 +261,11 @@ export const configSchema = z
       checkFormats(g.kvCacheFormats, kf, ["gpus", i, "kvCacheFormats"], "format KV");
     });
     cfg.engines.forEach((e, i) => {
+      for (const [k, v] of Object.entries(e.weightFormats))
+        if (v.memoryFormat && !wf.has(v.memoryFormat))
+          ctx.addIssue({ code: "custom", path: ["engines", i, "weightFormats", k, "memoryFormat"], message: `format inconnu : ${v.memoryFormat}` });
+      for (const k of Object.keys(e.featureNotes))
+        if (!(k in e.features)) ctx.addIssue({ code: "custom", path: ["engines", i, "featureNotes", k], message: `capacité inconnue : ${k}` });
       checkFormats(e.weightFormats, wf, ["engines", i, "weightFormats"], "format de poids");
       checkFormats(e.kvCacheFormats, kf, ["engines", i, "kvCacheFormats"], "format KV");
       checkFormats(e.gpus, gpuIds, ["engines", i, "gpus"], "GPU");

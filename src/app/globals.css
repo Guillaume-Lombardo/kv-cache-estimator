@@ -996,3 +996,44 @@ h3 {
 .import-result p {
   margin: 8px 0;
 }
+
+.chip.unverified {
+  border-style: dotted;
+  border-color: var(--muted);
+}
+.chip.unverified .chip-badge {
+  color: var(--muted);
+  font-weight: 700;
+}
+.lim-unv {
+  color: var(--muted);
+}
+.caps {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.caps td {
+  padding: 3px 4px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.caps td:first-child {
+  white-space: nowrap;
+}
+.cap-yes {
+  color: var(--good);
+  font-weight: 700;
+}
+.cap-no {
+  color: var(--bad);
+  font-weight: 700;
+}
+.cap-unv {
+  color: var(--muted);
+  font-weight: 700;
+}
+.sources a {
+  color: var(--accent);
+  text-decoration: none;
+}

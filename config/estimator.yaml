@@ -59,7 +59,24 @@ engines:
   - id: vllm
     name: vLLM / llm-d
     description: "vLLM ≥ 0.11 (moteur V1). llm-d orchestre des instances vLLM : mêmes besoins mémoire par instance."
-    features: { slidingWindowOptimized: true, dpAttention: true, kvOffload: true }
+    version: vLLM ≥ 0.11
+    features:
+      kvPaging: true
+      kvPoolPreallocated: true
+      prefixCaching: true
+      continuousBatching: true
+      slidingWindowAttention: true
+      slidingWindowFreesBlocks: true
+      tensorParallel: true
+      pipelineParallel: true
+      dpAttention: true
+      kvOffload: true
+    featureNotes:
+      kvPoolPreallocated: "Pool de blocs dimensionné au démarrage (--gpu-memory-utilization, après profilage des activations) ; blocs paginés à l'intérieur."
+      slidingWindowFreesBlocks: "Gestionnaire de KV hybride (vLLM ≥ 0.10) : les blocs sortis de la fenêtre sont rendus au pool."
+      kvOffload: "Connecteur d'offload CPU natif ou LMCache."
+    sources:
+      - { label: Documentation vLLM, url: "https://docs.vllm.ai/" }
     weightFormats:
       bf16: native
       fp16: native
@@ -88,27 +105,45 @@ engines:
       kvOffload: "--kv-offloading-size <Gio> (connecteur natif) ou LMCache"
 
   - id: zml
-    name: ZML (llmd)
-    description: "Profil indicatif, à compléter : ZML compile le graphe via OpenXLA/PJRT."
-    confidence: low
-    features: { slidingWindowOptimized: false, dpAttention: false, kvOffload: false }
+    name: ZML / LLMD
+    description: "Serveur LLMD de ZML (bibliothèque github.com/zml/zml, compilation OpenXLA/PJRT). Seules les capacités sourcées sont confirmées."
+    version: LLMD (doc zml.ai/llmd)
+    confidence: medium
+    features:
+      kvPaging: true
+      kvPoolPreallocated: unverified
+      prefixCaching: true
+      continuousBatching: true
+      slidingWindowAttention: unverified
+      slidingWindowFreesBlocks: unverified
+      tensorParallel: true
+      pipelineParallel: unverified
+      dpAttention: unverified
+      kvOffload: unverified
+    featureNotes:
+      kvPaging: PagedAttention (documentation LLMD).
+      prefixCaching: Documentation LLMD.
+      continuousBatching: Documentation LLMD.
+      tensorParallel: Documentation LLMD.
+    sources:
+      - { label: Documentation LLMD, url: "https://zml.ai/llmd/" }
+      - { label: Dépôt ZML, url: "https://github.com/zml/zml" }
     weightFormats:
-      bf16: native
-      fp16: native
-      fp8: { level: limited, note: Support à vérifier dans la version de ZML utilisée. }
-      int8: { level: limited, note: Support à vérifier dans la version de ZML utilisée. }
-      int4: { level: limited, note: Support à vérifier dans la version de ZML utilisée. }
-      mxfp4: { level: limited, note: Support à vérifier dans la version de ZML utilisée. }
-      nvfp4: { level: limited, note: Support à vérifier dans la version de ZML utilisée. }
+      bf16: unverified
+      fp16: unverified
+      fp8: unverified
+      int8: unverified
+      int4: unverified
+      mxfp4: unverified
+      nvfp4: unverified
     kvCacheFormats:
-      bf16: native
-      fp16: native
-      fp8: { level: limited, note: Support à vérifier dans la version de ZML utilisée. }
-    gpus:
-      v100: { level: limited, note: Support de Volta à vérifier. }
+      bf16: unverified
+      fp16: unverified
+      fp8: unverified
+      nvfp4: unverified
     notes:
-      - "Profil non vérifié : formats, gestion du KV (paginée ou préallouée) et fenêtres glissantes à confirmer. Fenêtres glissantes comptées au contexte complet par prudence."
-      - Pour llm-d (orchestration Kubernetes de vLLM), choisissez le profil vLLM.
+      - "Profil en cours de vérification : formats de poids, précision du KV et fenêtres glissantes sans source confirmée."
+      - "À ne pas confondre avec llm-d (orchestration Kubernetes de vLLM), couvert par le profil vLLM."
 
 # -----------------------------------------------------------------------------
 # GPUs — TFLOPS denses (sans sparsité), approximatifs.

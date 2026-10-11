@@ -88,7 +88,7 @@ describe("estimate", async () => {
     expect(e.kv.perRequestPerGpuBytes).toBe(e.kv.perRequestBytes / 2);
   });
 
-  it("fenêtre glissante : plafonnée dans vLLM, comptée en entier dans un moteur qui ne l'exploite pas", () => {
+  it("fenêtre glissante : plafonnée dans vLLM, comptée en entier si la libération des blocs n'est pas vérifiée", () => {
     const perTok = 16 * 256 * 2;
     const v = estimate(input(cfg, { model: "gemma-3-27b", contextTokens: 131072 }));
     expect(v.kv.perRequestBytes).toBe(52 * perTok * 1024 + 10 * perTok * 131072);
@@ -126,8 +126,9 @@ describe("estimate", async () => {
     const e = estimate(input(cfg, { gpu: "gh200", offloadGiBPerGpu: 400 }));
     expect(e.offload.parkedSessions).toBe(Math.floor((400 * GIB) / e.kv.perRequestClusterBytes));
     expect(e.offload.reloadMs).toBeCloseTo(((8 * GIB) / 450e9) * 1000, 3);
-    const z = estimate(input(cfg, { gpu: "gh200", offloadGiBPerGpu: 400, engine: "zml" }));
-    expect(z.offload.parkedSessions).toBe(0);
+    // Offload non vérifié dans ZML/LLMD : compté mais signalé.
+    const zi = input(cfg, { gpu: "gh200", offloadGiBPerGpu: 400, engine: "zml" });
+    expect(collectIssues(zi, estimate(zi), cfg.weightFormats).some((i) => i.title.startsWith("Offload KV non vérifié"))).toBe(true);
   });
 
   it("signale les limitations matérielles et moteur", () => {

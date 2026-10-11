@@ -83,7 +83,7 @@ function collectiveLatencyUs(gpu: GpuSpec, groupSize: number, perf: PerformanceS
 export function estimatePerf(input: EstimateInput, est: Estimate, perf: PerformanceSettings): PerfEstimate {
   const { model: m, gpu, engine, gpuCount: n, weightFormat, mode } = input;
   const sup = weightSupport(gpu, engine, weightFormat.id);
-  const { tflops, label } = computeTflops(gpu, weightFormat, sup.level === "limited");
+  const { tflops, label } = computeTflops(gpu, input.memoryWeightFormat ?? weightFormat, sup.level === "limited");
   const flopsPerSec = tflops * 1e12 * perf.computeEfficiency;
   const bytesPerSec = gpu.bandwidthTBs * 1e12 * perf.memoryEfficiency;
   const W = est.weights.totalBytes;

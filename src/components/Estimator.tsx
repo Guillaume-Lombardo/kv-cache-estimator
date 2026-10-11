@@ -87,7 +87,7 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
   const ctx = s.ctx;
 
   // --- Changements avec ajustement automatique
-  const dpAllowed = (m: ModelSpec, e: EngineSpec) => isMoE(m) && e.features.dpAttention;
+  const dpAllowed = (m: ModelSpec, e: EngineSpec) => isMoE(m) && e.features.dpAttention !== false;
 
   /** Formats après changement de GPU ou de moteur : garde le choix courant si possible, revient au natif si le choix était un repli. */
   const adjustFormats = (m: ModelSpec, g: GpuSpec, e: EngineSpec, msgs: string[]) => {
@@ -196,10 +196,11 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
     const sup = weightSupport(gpu, engine, f.id);
     const official = model.officialWeightFormats.includes(f.id);
     const bits = f.id === model.nativeWeightFormat && model.nativeBitsPerParam ? model.nativeBitsPerParam : f.bitsPerParam;
+    const mem = sup.memoryFormat && sup.memoryFormat !== f.id ? config.weightFormats.find((x) => x.id === sup.memoryFormat) : undefined;
     return {
       id: f.id,
       label: f.label,
-      sub: `${bits} bits${official ? " · officiel" : ""}`,
+      sub: mem ? `→ ${mem.label} en mémoire` : `${bits} bits${official ? " · officiel" : ""}`,
       level: sup.level,
       star: f.id === model.nativeWeightFormat,
       warn: model.weightFormatNotes[f.id] !== undefined,
@@ -246,8 +247,12 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
     {
       id: "dp-ep",
       label: "DP-attention + EP",
-      level: dpAllowed(model, engine) ? undefined : "unsupported",
-      title: !isMoE(model) ? "Réservé aux modèles MoE." : !engine.features.dpAttention ? `Indisponible dans ${engine.name}.` : "Attention répliquée, requêtes réparties par GPU, experts en expert-parallel.",
+      level: !dpAllowed(model, engine) ? "unsupported" : engine.features.dpAttention === "unverified" ? "unverified" : undefined,
+      title: !isMoE(model)
+        ? "Réservé aux modèles MoE."
+        : engine.features.dpAttention === false
+          ? `Indisponible dans ${engine.name}.`
+          : `Attention répliquée, requêtes réparties par GPU, experts en expert-parallel.${engine.features.dpAttention === "unverified" ? ` Non vérifié dans ${engine.name}.` : ""}`,
     },
   ];
   const tpOptions: ChipOption[] = divisors(s.gpuCount).map((d) => {
@@ -277,14 +282,24 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
   }));
 
   const limitationLine = (supports: { label: string; s: Support }[]) => {
-    const un = supports.filter((x) => x.s.level === "unsupported").map((x) => x.label);
-    const lim = supports.filter((x) => x.s.level === "limited").map((x) => x.label);
-    if (!un.length && !lim.length) return <p className="hint ok">Tous les formats sont supportés nativement ({gpu.name}, {engine.name}).</p>;
+    const pick = (l: Support["level"]) => supports.filter((x) => x.s.level === l).map((x) => x.label);
+    const groups = [
+      { items: pick("unsupported"), cls: "lim-un", icon: "✕", one: "non supporté", many: "non supportés" },
+      { items: pick("limited"), cls: "lim-lim", icon: "⚠", one: "limité", many: "limités" },
+      { items: pick("unverified"), cls: "lim-unv", icon: "?", one: "non vérifié", many: "non vérifiés" },
+    ].filter((g) => g.items.length);
+    if (!groups.length) return <p className="hint ok">Tous les formats sont supportés nativement ({gpu.name}, {engine.name}).</p>;
     return (
       <p className="hint">
-        {gpu.name} · {engine.name} : {un.length > 0 && <span className="lim-un">✕ {un.join(", ")} non supporté{un.length > 1 ? "s" : ""}</span>}
-        {un.length > 0 && lim.length > 0 && " · "}
-        {lim.length > 0 && <span className="lim-lim">⚠ {lim.join(", ")} limité{lim.length > 1 ? "s" : ""}</span>}
+        {gpu.name} · {engine.name} :{" "}
+        {groups.map((g, i) => (
+          <span key={g.cls}>
+            {i > 0 && " · "}
+            <span className={g.cls}>
+              {g.icon} {g.items.join(", ")} {g.items.length > 1 ? g.many : g.one}
+            </span>
+          </span>
+        ))}
         <span className="muted"> (survol pour le détail)</span>
       </p>
     );
@@ -436,6 +451,7 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
             <label className="field-label">Moteur d&apos;inférence</label>
             <ChipGroup label="Moteur" options={engineOptions} value={s.engineId} onChange={setEngine} />
             {engine.description && <p className="hint">{engine.description}</p>}
+            <EngineCapabilities engine={engine} />
           </div>
 
           <div className="field">
@@ -492,7 +508,8 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
                 Utiliser la mémoire Grace ({fmtInt(gpu.hostMemoryGiBPerGpu)} Gio par GPU)
               </button>
             )}
-            {!engine.features.kvOffload && <p className="hint lim-lim">Offload non disponible dans {engine.name}.</p>}
+            {engine.features.kvOffload === false && <p className="hint lim-lim">Offload non disponible dans {engine.name}.</p>}
+            {engine.features.kvOffload === "unverified" && <p className="hint lim-unv">Offload non vérifié dans {engine.name}.</p>}
             <p className="hint">
               Lien CPU↔GPU : {gpu.hostLinkLabel} ({gpu.hostLinkGBs} Go/s). {engine.flags.kvOffload && <>Option : {engine.flags.kvOffload}.</>}
             </p>
@@ -517,7 +534,12 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
             <Kpi
               title="Poids du modèle"
               value={fmtBytes(est.weights.totalBytes)}
-              sub={s.gpuCount > 1 ? `${fmtBytes(est.weights.perGpuBytes)} par GPU` : `${wf.label} · ${fmtParams(model.paramsB)} paramètres`}
+              sub={[
+                input.memoryWeightFormat && input.memoryWeightFormat.id !== wf.id ? `fichier ${wf.label} → ${input.memoryWeightFormat.label} en VRAM` : null,
+                s.gpuCount > 1 ? `${fmtBytes(est.weights.perGpuBytes)} par GPU` : `${wf.label} · ${fmtParams(model.paramsB)} paramètres`,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
               tone={est.fitsWeights ? undefined : "bad"}
             />
             <Kpi
@@ -623,5 +645,56 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
         </section>
       </main>
     </div>
+  );
+}
+
+const CAPABILITY_LABELS: Record<keyof EngineSpec["features"], string> = {
+  kvPaging: "KV paginé (PagedAttention)",
+  kvPoolPreallocated: "Pool KV préalloué au démarrage",
+  prefixCaching: "Prefix caching",
+  continuousBatching: "Continuous batching",
+  slidingWindowAttention: "Attention glissante (noyaux)",
+  slidingWindowFreesBlocks: "Libération des blocs hors fenêtre",
+  tensorParallel: "Tensor parallel",
+  pipelineParallel: "Pipeline parallel",
+  dpAttention: "DP-attention + EP",
+  kvOffload: "Offload du KV en RAM CPU",
+};
+
+function EngineCapabilities({ engine }: { engine: EngineSpec }) {
+  const entries = Object.entries(engine.features) as [keyof EngineSpec["features"], EngineSpec["features"][keyof EngineSpec["features"]]][];
+  return (
+    <details className="engine-caps">
+      <summary className="hint">
+        Capacités de {engine.name}
+        {engine.version ? ` (${engine.version})` : ""} : {entries.filter(([, v]) => v === true).length} oui ·{" "}
+        {entries.filter(([, v]) => v === false).length} non · {entries.filter(([, v]) => v === "unverified").length} non vérifiées
+      </summary>
+      <table className="caps">
+        <tbody>
+          {entries.map(([k, v]) => (
+            <tr key={k}>
+              <td>
+                <span className={v === true ? "cap-yes" : v === false ? "cap-no" : "cap-unv"}>{v === true ? "✓" : v === false ? "✕" : "?"}</span> {CAPABILITY_LABELS[k]}
+              </td>
+              <td className="muted">{engine.featureNotes[k] ?? (v === "unverified" ? "Non vérifié : aucune source." : "")}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {engine.sources.length > 0 && (
+        <p className="hint sources">
+          Sources :{" "}
+          {engine.sources.map((src, i) => (
+            <span key={src.url}>
+              {i > 0 && " · "}
+              <a href={src.url} target="_blank" rel="noreferrer">
+                {src.label}
+              </a>
+            </span>
+          ))}
+        </p>
+      )}
+    </details>
   );
 }

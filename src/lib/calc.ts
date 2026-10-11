@@ -31,7 +31,10 @@ export interface EstimateInput {
   /** Degré de TP (mode tp-pp) ; PP = gpuCount / tp. */
   tp: number;
   contextTokens: number;
+  /** Format du fichier de poids. */
   weightFormat: WeightFormat;
+  /** Format effectif en mémoire GPU, si le moteur ne conserve pas celui du fichier. */
+  memoryWeightFormat?: WeightFormat;
   kvFormat: KvFormat;
   /** Part de la mémoire de chaque GPU laissée aux activations, graphes CUDA, fragmentation. */
   reservePct: number;
@@ -105,7 +108,7 @@ export interface Estimate {
   sessionsPerGpu: number;
 }
 
-const LEVEL_ORDER: Record<SupportLevel, number> = { native: 0, limited: 1, unsupported: 2 };
+const LEVEL_ORDER: Record<SupportLevel, number> = { native: 0, limited: 1, unverified: 2, unsupported: 3 };
 
 export function supportOf(map: Record<string, Support>, id: string, missing: SupportLevel = "unsupported"): Support {
   return map[id] ?? { level: missing };
@@ -116,14 +119,24 @@ export function combinedSupport(gpuMap: Record<string, Support>, engineMap: Reco
   const g = supportOf(gpuMap, id);
   const e = supportOf(engineMap, id);
   const level = LEVEL_ORDER[g.level] >= LEVEL_ORDER[e.level] ? g.level : e.level;
-  const notes = [g.note, e.level === "unsupported" && !e.note ? `Non supporté par ${engineName}.` : e.note].filter(Boolean);
-  return { level, note: notes.length ? notes.join(" ") : undefined };
+  const engineNote = e.note ?? (e.level === "unsupported" ? `Non supporté par ${engineName}.` : e.level === "unverified" ? `Support non vérifié dans ${engineName}.` : undefined);
+  const notes = [g.note, engineNote].filter(Boolean);
+  return { level, note: notes.length ? notes.join(" ") : undefined, memoryFormat: e.memoryFormat ?? g.memoryFormat };
 }
 
 export const weightSupport = (gpu: GpuSpec, engine: EngineSpec, id: string) =>
   combinedSupport(gpu.weightFormats, engine.weightFormats, id, engine.name);
 export const kvSupport = (gpu: GpuSpec, engine: EngineSpec, id: string) =>
   combinedSupport(gpu.kvCacheFormats, engine.kvCacheFormats, id, engine.name);
+
+/** Format réellement occupé en mémoire GPU pour un fichier de poids donné. */
+export function memoryFormatFor(formats: WeightFormat[], gpu: GpuSpec, engine: EngineSpec, file: WeightFormat): WeightFormat {
+  const id = weightSupport(gpu, engine, file.id).memoryFormat;
+  return (id && formats.find((f) => f.id === id)) || file;
+}
+
+/** L'économie de VRAM des fenêtres glissantes n'est appliquée que si le moteur libère les blocs hors fenêtre. */
+export const slidingWindowSaves = (e: EngineSpec) => e.features.slidingWindowAttention === true && e.features.slidingWindowFreesBlocks === true;
 
 export function embeddingParams(m: ModelSpec): number {
   return m.vocabSize * m.hiddenSize * (m.tiedEmbeddings ? 1 : 2);
@@ -184,7 +197,7 @@ export function windowLabel(window: number): string {
 
 /** Tokens retenus par une couche à fenêtre glissante, selon le moteur. */
 export function storedTokens(g: LayerGroup, ctx: number, engine: EngineSpec): number {
-  if (g.kind === "sliding" && engine.features.slidingWindowOptimized) return Math.min(ctx, g.window);
+  if (g.kind === "sliding" && slidingWindowSaves(engine)) return Math.min(ctx, g.window);
   return ctx;
 }
 
@@ -218,8 +231,8 @@ export function estimate(input: EstimateInput): Estimate {
   const pp = mode === "dp-ep" ? 1 : Math.max(1, Math.round(n / tp));
   const kvB = kvFormat.bytesPerElement;
 
-  // --- Poids
-  const w = weightBytes(m, weightFormat);
+  // --- Poids (format effectif en mémoire)
+  const w = weightBytes(m, input.memoryWeightFormat ?? weightFormat);
   const attentionBytes = Math.min(w.bytes, (attentionParams(m) * w.bits) / 8);
   let weightsPerGpu = w.bytes / n;
   let replicatedAttentionBytes = 0;
@@ -245,7 +258,7 @@ export function estimate(input: EstimateInput): Estimate {
         if (tokens === ctx) perTokenBytes += g.count * perTok;
         detail = `${g.kvHeads} têtes KV × (${g.headDim}+${dv})`;
         if (g.kind === "sliding")
-          detail += engine.features.slidingWindowOptimized ? ` · fenêtre ${windowLabel(g.window)}` : ` · fenêtre ${windowLabel(g.window)} non exploitée`;
+          detail += slidingWindowSaves(engine) ? ` · fenêtre ${windowLabel(g.window)}` : ` · fenêtre ${windowLabel(g.window)}, blocs non libérés`;
         break;
       }
       case "mla": {
@@ -288,7 +301,7 @@ export function estimate(input: EstimateInput): Estimate {
   const sessions = mode === "dp-ep" ? sessionsPerGpu * n : sessionsPerGpu;
 
   // --- Offload CPU
-  const offloadTotal = engine.features.kvOffload ? (input.offloadGiBPerGpu ?? 0) * GIB * n : 0;
+  const offloadTotal = engine.features.kvOffload !== false ? (input.offloadGiBPerGpu ?? 0) * GIB * n : 0;
   const parkedSessions = perRequestClusterBytes > 0 ? Math.floor(offloadTotal / perRequestClusterBytes) : 0;
   const reloadMs = (perRequestPerGpuBytes / (gpu.hostLinkGBs * 1e9)) * 1000;
 
@@ -324,6 +337,7 @@ export function estimate(input: EstimateInput): Estimate {
 const LEVEL_FR: Record<SupportLevel, string> = {
   native: "natif",
   limited: "limité",
+  unverified: "non vérifié",
   unsupported: "non supporté",
 };
 export const supportLevelLabel = (l: SupportLevel) => LEVEL_FR[l];
@@ -361,13 +375,33 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       detail: eg.note,
     });
   if (engine.confidence !== "high")
-    out.push({ severity: "warning", title: `Profil ${engine.name} non vérifié`, detail: engine.notes[0] });
+    out.push({ severity: "warning", title: `Profil ${engine.name} partiellement vérifié`, detail: engine.notes[0] });
+  const fe = engine.features;
+  if (fe.kvPaging === false)
+    out.push({ severity: "info", title: `KV non paginé dans ${engine.name}`, detail: "Chaque requête réserve son contexte maximal : c'est déjà l'hypothèse du calcul (pire cas)." });
+  else if (fe.kvPaging === "unverified")
+    out.push({ severity: "info", title: `Pagination du KV non vérifiée dans ${engine.name}`, detail: "Sans effet sur ce calcul, fait au contexte maximal pour chaque session." });
+  if (fe.kvPoolPreallocated === "unverified")
+    out.push({ severity: "info", title: `Préallocation du pool KV non vérifiée dans ${engine.name}`, detail: "Si le pool est dimensionné autrement que par la réserve choisie, la capacité réelle diffère." });
 
   // --- Formats vs GPU et moteur
   const ws = weightSupport(gpu, engine, wf.id);
   if (ws.level !== "native")
     out.push({ severity: ws.level === "unsupported" ? "error" : "warning", title: `Poids ${wf.label} : ${LEVEL_FR[ws.level]}`, detail: ws.note });
   else if (ws.note) out.push({ severity: "info", title: `Poids ${wf.label}`, detail: ws.note });
+  const memFmt = input.memoryWeightFormat;
+  if (memFmt && memFmt.id !== wf.id)
+    out.push({
+      severity: "info",
+      title: `Fichier ${wf.label} chargé en ${memFmt.label} en mémoire`,
+      detail: `${engine.name} déquantifie les poids au chargement : ${gibText(est.weights.totalBytes)} en VRAM au lieu de ${gibText(weightBytes(m, wf).bytes)}.`,
+    });
+  else if (ws.level === "unverified" && wf.bitsPerParam < 16)
+    out.push({
+      severity: "info",
+      title: `Format en mémoire non vérifié pour ${wf.label}`,
+      detail: `Calcul fait en supposant que les poids restent en ${wf.label}. S'ils sont déquantifiés en BF16 au chargement : ${gibText(weightBytes(m, { ...wf, id: "bf16", bitsPerParam: 16 }).bytes)}.`,
+    });
 
   const ks = kvSupport(gpu, engine, kf.id);
   if (ks.level !== "native")
@@ -417,11 +451,29 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
   if (sliding.length) {
     const cnt = sliding.reduce((a, g) => a + g.count, 0);
     const win = Math.max(...sliding.map((g) => g.window));
-    out.push(
-      engine.features.slidingWindowOptimized
-        ? { severity: "info", title: `${cnt} couches à fenêtre glissante (${windowLabel(win)})`, detail: `Leur KV est plafonné à la fenêtre (gestionnaire hybride de ${engine.name}).` }
-        : { severity: "warning", title: `${cnt} couches à fenêtre glissante comptées au contexte complet`, detail: `${engine.name} n'exploite pas la fenêtre dans ce profil : chaque couche réserve tout le contexte.` },
-    );
+    const f = engine.features;
+    if (f.slidingWindowAttention === false)
+      out.push({
+        severity: "error",
+        title: `Attention glissante non supportée par ${engine.name}`,
+        detail: `${cnt} couches de ${m.name} utilisent une fenêtre de ${windowLabel(win)} : sans support, les résultats du modèle sont faux.`,
+      });
+    else if (slidingWindowSaves(engine))
+      out.push({ severity: "info", title: `${cnt} couches à fenêtre glissante (${windowLabel(win)})`, detail: `${engine.name} libère les blocs KV sortis de la fenêtre : KV plafonné à la fenêtre.` });
+    else
+      out.push({
+        severity: "warning",
+        title: `${cnt} couches à fenêtre glissante comptées au contexte complet`,
+        detail: [
+          f.slidingWindowAttention === "unverified" ? `Support de l'attention glissante non vérifié dans ${engine.name}.` : `Attention glissante supportée par ${engine.name}.`,
+          f.slidingWindowFreesBlocks === false
+            ? "Les blocs hors fenêtre ne sont pas libérés : aucune économie de VRAM."
+            : "Libération des blocs hors fenêtre non vérifiée : aucune économie de VRAM appliquée.",
+          engine.featureNotes.slidingWindowFreesBlocks ?? engine.featureNotes.slidingWindowAttention,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      });
   }
   if (m.layers.some((g) => g.kind === "linear"))
     out.push({
@@ -459,6 +511,17 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
 
   // --- Parallélisme
   if (n > 1 && mode === "tp-pp") {
+    const cap = (k: "tensorParallel" | "pipelineParallel", used: boolean, label: string) => {
+      const v = engine.features[k];
+      if (!used || v === true) return;
+      out.push({
+        severity: v === false ? "error" : "warning",
+        title: `${label} ${v === false ? "non supporté" : "non vérifié"} dans ${engine.name}`,
+        detail: engine.featureNotes[k],
+      });
+    };
+    cap("tensorParallel", tp > 1, "Tensor parallel");
+    cap("pipelineParallel", pp > 1, "Pipeline parallel");
     if (tp > 1 && m.attentionHeads % tp !== 0)
       out.push({
         severity: "error",
@@ -491,8 +554,10 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
     }
   }
   if (mode === "dp-ep") {
-    if (!engine.features.dpAttention)
+    if (engine.features.dpAttention === false)
       out.push({ severity: "error", title: `DP-attention indisponible dans ${engine.name}`, detail: "Choisissez TP/PP." });
+    else if (engine.features.dpAttention === "unverified")
+      out.push({ severity: "warning", title: `DP-attention non vérifiée dans ${engine.name}`, detail: engine.featureNotes.dpAttention ?? "Aucune source ne confirme ce mode : résultat théorique." });
     if (!isMoE(m))
       out.push({ severity: "warning", title: "DP-attention conçu pour les MoE", detail: "Sur un modèle dense, cela revient à N répliques complètes." });
     else if (n > 1)
@@ -505,14 +570,17 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
 
   // --- Offload
   if ((input.offloadGiBPerGpu ?? 0) > 0) {
-    if (!engine.features.kvOffload)
+    if (engine.features.kvOffload === false)
       out.push({ severity: "warning", title: `Offload KV non disponible dans ${engine.name}`, detail: "La mémoire CPU saisie n'est pas comptée." });
-    else
+    else {
+      if (engine.features.kvOffload === "unverified")
+        out.push({ severity: "warning", title: `Offload KV non vérifié dans ${engine.name}`, detail: engine.featureNotes.kvOffload ?? "Sessions en réserve théoriques." });
       out.push({
         severity: "info",
         title: `Offload CPU : ${est.offload.parkedSessions} sessions en réserve`,
         detail: `Le KV déchargé n'est pas lu pendant le décodage : il sert aux sessions en attente, préemptées ou à réutiliser (prefix cache). Rechargement d'une session ≈ ${Math.round(est.offload.reloadMs)} ms via ${gpu.hostLinkLabel}.`,
       });
+    }
   }
 
   if (m.confidence !== "high")

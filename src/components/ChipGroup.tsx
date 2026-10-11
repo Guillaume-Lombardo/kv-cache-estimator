@@ -38,6 +38,7 @@ export function ChipGroup({
           checked && "checked",
           disabled && "disabled",
           o.level === "limited" && "limited",
+          o.level === "unverified" && "unverified",
           o.warn && "warn",
         ]
           .filter(Boolean)
@@ -62,6 +63,7 @@ export function ChipGroup({
               {o.label}
               {o.level === "limited" && <span className="chip-badge">⚠</span>}
               {(o.warn && o.level !== "limited") && <span className="chip-badge">⚠</span>}
+              {o.level === "unverified" && <span className="chip-badge">?</span>}
               {disabled && <span className="chip-badge">✕</span>}
             </span>
             {o.sub && <span className="chip-sub">{o.sub}</span>}
