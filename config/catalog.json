@@ -1,0 +1,2222 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-10-11",
+  "title": "Catalogue open weights · octobre 2026",
+  "gpus": [
+    {
+      "id": "v100-pcie-16",
+      "name": "V100 PCIe · 16 Go",
+      "architecture": "Volta",
+      "memoryGiB": 14.901161193847656,
+      "memoryNote": "Valeur nominale de 16 Go interprétée en unités décimales puis convertie en Gio. Remplacer par nvidia-smi (MiB / 1024) pour un dimensionnement réel.",
+      "interconnects": [
+        "pcie"
+      ],
+      "notes": [],
+      "weights": {
+        "fp16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "bf16": {
+          "status": "unsupported",
+          "reason": "Pas de calcul BF16 natif sur Volta : choisir FP16 dans ce profil CUDA."
+        },
+        "fp8": {
+          "status": "unsupported",
+          "reason": "Profil FP8 CUDA non validé sur Volta. Une déquantification logicielle n’est pas modélisée."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "nvfp4": {
+          "status": "unsupported",
+          "reason": "Aucun backend NVFP4 retenu pour Volta dans ce catalogue."
+        }
+      },
+      "kv": {
+        "fp16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "bf16": {
+          "status": "unsupported",
+          "reason": "Pas de calcul BF16 natif sur Volta : choisir FP16 dans ce profil CUDA."
+        },
+        "fp8": {
+          "status": "unsupported",
+          "reason": "Profil FP8 CUDA non validé sur Volta. Une déquantification logicielle n’est pas modélisée."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        }
+      },
+      "sources": [
+        {
+          "label": "NVIDIA · spécifications",
+          "url": "https://images.nvidia.com/content/technologies/volta/pdf/volta-v100-datasheet-update-us-1165301-r5.pdf"
+        },
+        {
+          "label": "NVIDIA · profils GPU",
+          "url": "https://docs.nvidia.com/nim/large-language-models/latest/supported-architectures.html"
+        },
+        {
+          "label": "vLLM · quantification",
+          "url": "https://docs.vllm.ai/en/stable/features/quantization/index.html"
+        }
+      ]
+    },
+    {
+      "id": "v100-sxm2-32",
+      "name": "V100 SXM2 · 32 Go",
+      "architecture": "Volta",
+      "memoryGiB": 29.802322387695312,
+      "memoryNote": "Valeur nominale de 32 Go interprétée en unités décimales puis convertie en Gio. Remplacer par nvidia-smi (MiB / 1024) pour un dimensionnement réel.",
+      "interconnects": [
+        "pcie",
+        "nvlink"
+      ],
+      "notes": [],
+      "weights": {
+        "fp16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "bf16": {
+          "status": "unsupported",
+          "reason": "Pas de calcul BF16 natif sur Volta : choisir FP16 dans ce profil CUDA."
+        },
+        "fp8": {
+          "status": "unsupported",
+          "reason": "Profil FP8 CUDA non validé sur Volta. Une déquantification logicielle n’est pas modélisée."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "nvfp4": {
+          "status": "unsupported",
+          "reason": "Aucun backend NVFP4 retenu pour Volta dans ce catalogue."
+        }
+      },
+      "kv": {
+        "fp16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "bf16": {
+          "status": "unsupported",
+          "reason": "Pas de calcul BF16 natif sur Volta : choisir FP16 dans ce profil CUDA."
+        },
+        "fp8": {
+          "status": "unsupported",
+          "reason": "Profil FP8 CUDA non validé sur Volta. Une déquantification logicielle n’est pas modélisée."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        }
+      },
+      "sources": [
+        {
+          "label": "NVIDIA · spécifications",
+          "url": "https://images.nvidia.com/content/technologies/volta/pdf/volta-v100-datasheet-update-us-1165301-r5.pdf"
+        },
+        {
+          "label": "NVIDIA · profils GPU",
+          "url": "https://docs.nvidia.com/nim/large-language-models/latest/supported-architectures.html"
+        },
+        {
+          "label": "vLLM · quantification",
+          "url": "https://docs.vllm.ai/en/stable/features/quantization/index.html"
+        }
+      ]
+    },
+    {
+      "id": "l40s",
+      "name": "L40S · 48 Go",
+      "architecture": "Ada",
+      "memoryGiB": 44.70348358154297,
+      "memoryNote": "Valeur nominale de 48 Go interprétée en unités décimales puis convertie en Gio. Remplacer par nvidia-smi (MiB / 1024) pour un dimensionnement réel.",
+      "interconnects": [
+        "pcie"
+      ],
+      "notes": [
+        "Aucun NVLink sur L40S. Le multi-GPU reste possible via PCIe."
+      ],
+      "weights": {
+        "fp16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "nvfp4": {
+          "status": "conditional",
+          "reason": "Pas de Tensor Cores FP4 natifs. Déquantification / noyau spécialisé requis (ex. Marlin selon architecture et version)."
+        }
+      },
+      "kv": {
+        "fp16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        }
+      },
+      "sources": [
+        {
+          "label": "NVIDIA · spécifications",
+          "url": "https://www.nvidia.com/en-us/data-center/l40s/"
+        },
+        {
+          "label": "NVIDIA · profils GPU",
+          "url": "https://docs.nvidia.com/nim/large-language-models/latest/supported-architectures.html"
+        },
+        {
+          "label": "vLLM · quantification",
+          "url": "https://docs.vllm.ai/en/stable/features/quantization/index.html"
+        }
+      ]
+    },
+    {
+      "id": "h100-pcie",
+      "name": "H100 PCIe · 80 Go",
+      "architecture": "Hopper",
+      "memoryGiB": 74.50580596923828,
+      "memoryNote": "Valeur nominale de 80 Go interprétée en unités décimales puis convertie en Gio. Remplacer par nvidia-smi (MiB / 1024) pour un dimensionnement réel.",
+      "interconnects": [
+        "pcie"
+      ],
+      "notes": [],
+      "weights": {
+        "fp16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "nvfp4": {
+          "status": "conditional",
+          "reason": "Pas de Tensor Cores FP4 natifs. Déquantification / noyau spécialisé requis (ex. Marlin selon architecture et version)."
+        }
+      },
+      "kv": {
+        "fp16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        }
+      },
+      "sources": [
+        {
+          "label": "NVIDIA · spécifications",
+          "url": "https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory/latest/components.html"
+        },
+        {
+          "label": "NVIDIA · profils GPU",
+          "url": "https://docs.nvidia.com/nim/large-language-models/latest/supported-architectures.html"
+        },
+        {
+          "label": "vLLM · quantification",
+          "url": "https://docs.vllm.ai/en/stable/features/quantization/index.html"
+        }
+      ]
+    },
+    {
+      "id": "h100-sxm",
+      "name": "H100 SXM · 80 Go",
+      "architecture": "Hopper",
+      "memoryGiB": 74.50580596923828,
+      "memoryNote": "Valeur nominale de 80 Go interprétée en unités décimales puis convertie en Gio. Remplacer par nvidia-smi (MiB / 1024) pour un dimensionnement réel.",
+      "interconnects": [
+        "pcie",
+        "nvlink"
+      ],
+      "notes": [],
+      "weights": {
+        "fp16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "nvfp4": {
+          "status": "conditional",
+          "reason": "Pas de Tensor Cores FP4 natifs. Déquantification / noyau spécialisé requis (ex. Marlin selon architecture et version)."
+        }
+      },
+      "kv": {
+        "fp16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        }
+      },
+      "sources": [
+        {
+          "label": "NVIDIA · spécifications",
+          "url": "https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory/latest/components.html"
+        },
+        {
+          "label": "NVIDIA · profils GPU",
+          "url": "https://docs.nvidia.com/nim/large-language-models/latest/supported-architectures.html"
+        },
+        {
+          "label": "vLLM · quantification",
+          "url": "https://docs.vllm.ai/en/stable/features/quantization/index.html"
+        }
+      ]
+    },
+    {
+      "id": "h200",
+      "name": "H200 SXM · 141 Go",
+      "architecture": "Hopper",
+      "memoryGiB": 131.31648302078247,
+      "memoryNote": "Valeur nominale de 141 Go interprétée en unités décimales puis convertie en Gio. Remplacer par nvidia-smi (MiB / 1024) pour un dimensionnement réel.",
+      "interconnects": [
+        "pcie",
+        "nvlink"
+      ],
+      "notes": [],
+      "weights": {
+        "fp16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "nvfp4": {
+          "status": "conditional",
+          "reason": "Pas de Tensor Cores FP4 natifs. Déquantification / noyau spécialisé requis (ex. Marlin selon architecture et version)."
+        }
+      },
+      "kv": {
+        "fp16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        }
+      },
+      "sources": [
+        {
+          "label": "NVIDIA · spécifications",
+          "url": "https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory/latest/components.html"
+        },
+        {
+          "label": "NVIDIA · profils GPU",
+          "url": "https://docs.nvidia.com/nim/large-language-models/latest/supported-architectures.html"
+        },
+        {
+          "label": "vLLM · quantification",
+          "url": "https://docs.vllm.ai/en/stable/features/quantization/index.html"
+        }
+      ]
+    },
+    {
+      "id": "gh200-96",
+      "name": "GH200 · 96 Go HBM",
+      "architecture": "Hopper",
+      "memoryGiB": 89.40696716308594,
+      "memoryNote": "Valeur nominale de 96 Go interprétée en unités décimales puis convertie en Gio. Remplacer par nvidia-smi (MiB / 1024) pour un dimensionnement réel.",
+      "interconnects": [
+        "pcie",
+        "nvlink"
+      ],
+      "notes": [
+        "Seule la HBM GPU est comptée, pas la LPDDR du CPU Grace. NVLink GPU↔GPU dépend du système (ex. NVL2) ; C2C CPU↔GPU ne suffit pas."
+      ],
+      "weights": {
+        "fp16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "nvfp4": {
+          "status": "conditional",
+          "reason": "Pas de Tensor Cores FP4 natifs. Déquantification / noyau spécialisé requis (ex. Marlin selon architecture et version)."
+        }
+      },
+      "kv": {
+        "fp16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        }
+      },
+      "sources": [
+        {
+          "label": "NVIDIA · spécifications",
+          "url": "https://www.nvidia.com/en-us/data-center/grace-hopper-superchip/"
+        },
+        {
+          "label": "NVIDIA · profils GPU",
+          "url": "https://docs.nvidia.com/nim/large-language-models/latest/supported-architectures.html"
+        },
+        {
+          "label": "vLLM · quantification",
+          "url": "https://docs.vllm.ai/en/stable/features/quantization/index.html"
+        }
+      ]
+    },
+    {
+      "id": "gh200-144",
+      "name": "GH200 · 144 Go HBM",
+      "architecture": "Hopper",
+      "memoryGiB": 134.1104507446289,
+      "memoryNote": "Valeur nominale de 144 Go interprétée en unités décimales puis convertie en Gio. Remplacer par nvidia-smi (MiB / 1024) pour un dimensionnement réel.",
+      "interconnects": [
+        "pcie",
+        "nvlink"
+      ],
+      "notes": [
+        "Seule la HBM GPU est comptée, pas la LPDDR du CPU Grace. NVLink GPU↔GPU dépend du système (ex. NVL2) ; C2C CPU↔GPU ne suffit pas."
+      ],
+      "weights": {
+        "fp16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "nvfp4": {
+          "status": "conditional",
+          "reason": "Pas de Tensor Cores FP4 natifs. Déquantification / noyau spécialisé requis (ex. Marlin selon architecture et version)."
+        }
+      },
+      "kv": {
+        "fp16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        }
+      },
+      "sources": [
+        {
+          "label": "NVIDIA · spécifications",
+          "url": "https://www.nvidia.com/en-us/data-center/grace-hopper-superchip/"
+        },
+        {
+          "label": "NVIDIA · profils GPU",
+          "url": "https://docs.nvidia.com/nim/large-language-models/latest/supported-architectures.html"
+        },
+        {
+          "label": "vLLM · quantification",
+          "url": "https://docs.vllm.ai/en/stable/features/quantization/index.html"
+        }
+      ]
+    },
+    {
+      "id": "b200",
+      "name": "B200 SXM · 180 Go",
+      "architecture": "Blackwell",
+      "memoryGiB": 167.63806343078613,
+      "memoryNote": "Valeur nominale de 180 Go interprétée en unités décimales puis convertie en Gio. Remplacer par nvidia-smi (MiB / 1024) pour un dimensionnement réel.",
+      "interconnects": [
+        "pcie",
+        "nvlink"
+      ],
+      "notes": [],
+      "weights": {
+        "fp16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "nvfp4": {
+          "status": "conditional",
+          "reason": "Tensor Cores FP4 natifs ; checkpoint NVFP4 et noyaux compatibles indispensables."
+        }
+      },
+      "kv": {
+        "fp16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        }
+      },
+      "sources": [
+        {
+          "label": "NVIDIA · spécifications",
+          "url": "https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory/latest/components.html"
+        },
+        {
+          "label": "NVIDIA · profils GPU",
+          "url": "https://docs.nvidia.com/nim/large-language-models/latest/supported-architectures.html"
+        },
+        {
+          "label": "vLLM · quantification",
+          "url": "https://docs.vllm.ai/en/stable/features/quantization/index.html"
+        }
+      ]
+    },
+    {
+      "id": "gb200",
+      "name": "GB200 · 186 Go / GPU",
+      "architecture": "Blackwell",
+      "memoryGiB": 173.225998878479,
+      "memoryNote": "Valeur nominale de 186 Go interprétée en unités décimales puis convertie en Gio. Remplacer par nvidia-smi (MiB / 1024) pour un dimensionnement réel.",
+      "interconnects": [
+        "pcie",
+        "nvlink"
+      ],
+      "notes": [
+        "Le nombre désigne les GPU physiques. Un superchip Grace Blackwell contient deux GPU. La mémoire CPU Grace est exclue."
+      ],
+      "weights": {
+        "fp16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "nvfp4": {
+          "status": "conditional",
+          "reason": "Tensor Cores FP4 natifs ; checkpoint NVFP4 et noyaux compatibles indispensables."
+        }
+      },
+      "kv": {
+        "fp16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        }
+      },
+      "sources": [
+        {
+          "label": "NVIDIA · spécifications",
+          "url": "https://www.nvidia.com/en-us/data-center/gb200-nvl72/"
+        },
+        {
+          "label": "NVIDIA · profils GPU",
+          "url": "https://docs.nvidia.com/nim/large-language-models/latest/supported-architectures.html"
+        },
+        {
+          "label": "vLLM · quantification",
+          "url": "https://docs.vllm.ai/en/stable/features/quantization/index.html"
+        }
+      ]
+    },
+    {
+      "id": "b300",
+      "name": "B300 SXM · 288 Go nominal",
+      "architecture": "Blackwell Ultra",
+      "memoryGiB": 268.2209014892578,
+      "memoryNote": "Valeur nominale de 288 Go interprétée en unités décimales puis convertie en Gio. Remplacer par nvidia-smi (MiB / 1024) pour un dimensionnement réel.",
+      "interconnects": [
+        "pcie",
+        "nvlink"
+      ],
+      "notes": [
+        "288 Go nominaux : des fiches NVIDIA indiquent 270 Go (B300) / 279 Go (GB300) utilisables. Renseigner la VRAM mesurée pour le serveur réel."
+      ],
+      "weights": {
+        "fp16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "nvfp4": {
+          "status": "conditional",
+          "reason": "Tensor Cores FP4 natifs ; checkpoint NVFP4 et noyaux compatibles indispensables."
+        }
+      },
+      "kv": {
+        "fp16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        }
+      },
+      "sources": [
+        {
+          "label": "NVIDIA · spécifications",
+          "url": "https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory/latest/components.html"
+        },
+        {
+          "label": "NVIDIA · profils GPU",
+          "url": "https://docs.nvidia.com/nim/large-language-models/latest/supported-architectures.html"
+        },
+        {
+          "label": "vLLM · quantification",
+          "url": "https://docs.vllm.ai/en/stable/features/quantization/index.html"
+        },
+        {
+          "label": "NVIDIA · capacités utilisables Blackwell Ultra",
+          "url": "https://resources.nvidia.com/en-us-gpu-resources/blackwell-ultra-datasheet"
+        }
+      ]
+    },
+    {
+      "id": "gb300",
+      "name": "GB300 · 288 Go nominal / GPU",
+      "architecture": "Blackwell Ultra",
+      "memoryGiB": 268.2209014892578,
+      "memoryNote": "Valeur nominale de 288 Go interprétée en unités décimales puis convertie en Gio. Remplacer par nvidia-smi (MiB / 1024) pour un dimensionnement réel.",
+      "interconnects": [
+        "pcie",
+        "nvlink"
+      ],
+      "notes": [
+        "Le nombre désigne les GPU physiques. Un superchip Grace Blackwell contient deux GPU. La mémoire CPU Grace est exclue.",
+        "288 Go nominaux : des fiches NVIDIA indiquent 270 Go (B300) / 279 Go (GB300) utilisables. Renseigner la VRAM mesurée pour le serveur réel."
+      ],
+      "weights": {
+        "fp16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Calcul 16 bits matériel ; compatibilité du moteur à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Checkpoint et noyau de quantification compatibles requis ; précision et vitesse à vérifier."
+        },
+        "nvfp4": {
+          "status": "conditional",
+          "reason": "Tensor Cores FP4 natifs ; checkpoint NVFP4 et noyaux compatibles indispensables."
+        }
+      },
+      "kv": {
+        "fp16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "bf16": {
+          "status": "native",
+          "reason": "Stockage 16 bits ; backend d’attention à vérifier."
+        },
+        "fp8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int8": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        },
+        "int4": {
+          "status": "conditional",
+          "reason": "Support du cache quantifié à vérifier dans le moteur, sa version et son backend d’attention."
+        }
+      },
+      "sources": [
+        {
+          "label": "NVIDIA · spécifications",
+          "url": "https://www.nvidia.com/en-us/data-center/gb300-nvl72/"
+        },
+        {
+          "label": "NVIDIA · profils GPU",
+          "url": "https://docs.nvidia.com/nim/large-language-models/latest/supported-architectures.html"
+        },
+        {
+          "label": "vLLM · quantification",
+          "url": "https://docs.vllm.ai/en/stable/features/quantization/index.html"
+        },
+        {
+          "label": "NVIDIA · capacités utilisables Blackwell Ultra",
+          "url": "https://resources.nvidia.com/en-us-gpu-resources/blackwell-ultra-datasheet"
+        }
+      ]
+    }
+  ],
+  "models": [
+    {
+      "id": "zai-org/GLM-4.7-Flash",
+      "name": "GLM-4.7-Flash",
+      "family": "GLM · Z.ai",
+      "architecture": "MLA / MoE",
+      "parameters": 31221488576,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 202752,
+      "queryHeads": 20,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "mla",
+          "label": "Attention MLA compressée",
+          "layers": 47,
+          "latentDim": 512,
+          "ropeDim": 64
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "Décodage spéculatif / MTP désactivé dans le calcul des caches. Les poids auxiliaires peuvent être inclus dans le total."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/zai-org/GLM-4.7-Flash/blob/7dd20894a642a0aa287e9827cb1a1f7f91386b67/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/zai-org/GLM-4.7-Flash"
+        }
+      ],
+      "revision": "7dd20894a642a0aa287e9827cb1a1f7f91386b67"
+    },
+    {
+      "id": "zai-org/GLM-5.3-Flash",
+      "name": "GLM-5.3-Flash",
+      "family": "GLM · Z.ai",
+      "architecture": "Hybride KDA / MLA",
+      "parameters": 321323031390,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 1048576,
+      "queryHeads": 64,
+      "status": "experimental",
+      "blocks": [
+        {
+          "kind": "mla",
+          "label": "Attention MLA compressée",
+          "layers": 11,
+          "latentDim": 512,
+          "ropeDim": 0
+        },
+        {
+          "kind": "state",
+          "label": "États KDA FP32 + convolutions FP16",
+          "bytes": 149291008
+        },
+        {
+          "kind": "index",
+          "label": "Index DSA (borne FP16 non compressée)",
+          "layers": 11,
+          "bytesPerToken": 256
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "État KDA = couches × (H × D² × 4 + 3 × H × D × K × 2). Estimation conservatrice sans partage entre GPU.",
+        "Index DSA : borne conservatrice sans réduction par pooling, 128 composantes FP16 par token et couche DSA.",
+        "Décodage spéculatif / MTP désactivé dans le calcul des caches. Les poids auxiliaires peuvent être inclus dans le total.",
+        "Les tokens visuels consomment aussi du contexte. Les activations des encodeurs ne sont pas calculées ; prévoir une réserve adaptée."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/zai-org/GLM-5.3-Flash/blob/eb9eb208eb0d988989d07a6a12d0fdeb5f52574a/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/zai-org/GLM-5.3-Flash"
+        }
+      ],
+      "revision": "eb9eb208eb0d988989d07a6a12d0fdeb5f52574a"
+    },
+    {
+      "id": "zai-org/GLM-4.7",
+      "name": "GLM-4.7",
+      "family": "GLM · Z.ai",
+      "architecture": "GQA / MoE",
+      "parameters": 358337791296,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 202752,
+      "queryHeads": 96,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Attention globale",
+          "layers": 92,
+          "heads": 8,
+          "keyDim": 128,
+          "valueDim": 128
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "Décodage spéculatif / MTP désactivé dans le calcul des caches. Les poids auxiliaires peuvent être inclus dans le total."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/zai-org/GLM-4.7/blob/602d01efcdd332c5238ca4bcede555defbe83eb7/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/zai-org/GLM-4.7"
+        }
+      ],
+      "revision": "602d01efcdd332c5238ca4bcede555defbe83eb7"
+    },
+    {
+      "id": "zai-org/GLM-5.3",
+      "name": "GLM-5.3",
+      "family": "GLM · Z.ai",
+      "architecture": "MLA / DSA / MoE",
+      "parameters": 753329940480,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 1048576,
+      "queryHeads": 64,
+      "status": "experimental",
+      "blocks": [
+        {
+          "kind": "mla",
+          "label": "Attention MLA compressée",
+          "layers": 78,
+          "latentDim": 512,
+          "ropeDim": 64
+        },
+        {
+          "kind": "index",
+          "label": "Index DSA (borne sans partage)",
+          "layers": 78,
+          "bytesPerToken": 256
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "Index DSA : réserve conservatrice de 128 composantes FP16 par token et couche, sans gain IndexShare. Le top-k réduit le calcul, pas la rétention de tous les latents.",
+        "Décodage spéculatif / MTP désactivé dans le calcul des caches. Les poids auxiliaires peuvent être inclus dans le total."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/zai-org/GLM-5.3/blob/aca966e4e02791568aa6a4ced368624b3d897f42/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/zai-org/GLM-5.3"
+        }
+      ],
+      "revision": "aca966e4e02791568aa6a4ced368624b3d897f42"
+    },
+    {
+      "id": "google/gemma-4-26B-A4B",
+      "name": "gemma-4-26B-A4B",
+      "family": "Google",
+      "architecture": "GQA globale / locale",
+      "parameters": 25805936206,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 262144,
+      "queryHeads": 16,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Attention globale",
+          "layers": 5,
+          "heads": 2,
+          "keyDim": 512,
+          "valueDim": 512
+        },
+        {
+          "kind": "gqa",
+          "label": "Attention locale",
+          "layers": 25,
+          "heads": 8,
+          "keyDim": 256,
+          "valueDim": 256,
+          "window": 1024
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "K et V sont comptés séparément : le partage des projections ne supprime pas les caches après normalisation et RoPE.",
+        "Les tokens visuels consomment aussi du contexte. Les activations des encodeurs ne sont pas calculées ; prévoir une réserve adaptée."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/google/gemma-4-26B-A4B/blob/24548b62aa021d562695c04aaf7758a1ea47990b/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/google/gemma-4-26B-A4B"
+        }
+      ],
+      "revision": "24548b62aa021d562695c04aaf7758a1ea47990b"
+    },
+    {
+      "id": "google/gemma-4-31B",
+      "name": "gemma-4-31B",
+      "family": "Google",
+      "architecture": "GQA globale / locale",
+      "parameters": 31273088876,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 262144,
+      "queryHeads": 32,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Attention globale",
+          "layers": 10,
+          "heads": 4,
+          "keyDim": 512,
+          "valueDim": 512
+        },
+        {
+          "kind": "gqa",
+          "label": "Attention locale",
+          "layers": 50,
+          "heads": 16,
+          "keyDim": 256,
+          "valueDim": 256,
+          "window": 1024
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "K et V sont comptés séparément : le partage des projections ne supprime pas les caches après normalisation et RoPE.",
+        "Les tokens visuels consomment aussi du contexte. Les activations des encodeurs ne sont pas calculées ; prévoir une réserve adaptée."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/google/gemma-4-31B/blob/5bbc2fb1c1b2c611d06e3d9f23c170ba21659d89/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/google/gemma-4-31B"
+        }
+      ],
+      "revision": "5bbc2fb1c1b2c611d06e3d9f23c170ba21659d89"
+    },
+    {
+      "id": "moonshotai/Kimi-K2-Instruct",
+      "name": "Kimi-K2-Instruct",
+      "family": "Kimi · Moonshot",
+      "architecture": "MLA / MoE",
+      "parameters": 1026408235864,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 131072,
+      "queryHeads": 64,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "mla",
+          "label": "Attention MLA compressée",
+          "layers": 61,
+          "latentDim": 512,
+          "ropeDim": 64
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/moonshotai/Kimi-K2-Instruct/blob/fd1984e2b7a3350dbf7305fe73a4ede25c14de50/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/moonshotai/Kimi-K2-Instruct"
+        }
+      ],
+      "revision": "fd1984e2b7a3350dbf7305fe73a4ede25c14de50"
+    },
+    {
+      "id": "moonshotai/Kimi-K2.5",
+      "name": "Kimi-K2.5",
+      "family": "Kimi · Moonshot",
+      "architecture": "MLA / MoE",
+      "parameters": 1027000000000.0,
+      "parameterNote": "Nombre nominal arrondi ; tensors quantifiés empaquetés non utilisés comme nombre de paramètres logiques.",
+      "maxContext": 262144,
+      "queryHeads": 64,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "mla",
+          "label": "Attention MLA compressée",
+          "layers": 61,
+          "latentDim": 512,
+          "ropeDim": 64
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "Les tokens visuels consomment aussi du contexte. Les activations des encodeurs ne sont pas calculées ; prévoir une réserve adaptée."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/moonshotai/Kimi-K2.5/blob/4d01dfe0332d63057c186e0b262165819efb6611/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/moonshotai/Kimi-K2.5"
+        }
+      ],
+      "revision": "4d01dfe0332d63057c186e0b262165819efb6611"
+    },
+    {
+      "id": "moonshotai/Kimi-K3",
+      "name": "Kimi-K3",
+      "family": "Kimi · Moonshot",
+      "architecture": "Hybride KDA / MLA",
+      "parameters": 2800000000000.0,
+      "parameterNote": "Nombre nominal arrondi ; tensors quantifiés empaquetés non utilisés comme nombre de paramètres logiques.",
+      "maxContext": 1048576,
+      "queryHeads": 96,
+      "status": "experimental",
+      "blocks": [
+        {
+          "kind": "mla",
+          "label": "Attention MLA compressée",
+          "layers": 24,
+          "latentDim": 512,
+          "ropeDim": 0
+        },
+        {
+          "kind": "state",
+          "label": "États KDA FP32 + convolutions FP16",
+          "bytes": 454459392
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "État KDA = couches × (H × D² × 4 + 3 × H × D × K × 2). Estimation conservatrice sans partage entre GPU.",
+        "Les tokens visuels consomment aussi du contexte. Les activations des encodeurs ne sont pas calculées ; prévoir une réserve adaptée."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/moonshotai/Kimi-K3/blob/f831ab66814297da540d832a5235f8e904f29d06/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/moonshotai/Kimi-K3"
+        }
+      ],
+      "revision": "f831ab66814297da540d832a5235f8e904f29d06"
+    },
+    {
+      "id": "XiaomiMiMo/MiMo-7B-RL",
+      "name": "MiMo-7B-RL",
+      "family": "MiMo · Xiaomi",
+      "architecture": "GQA",
+      "parameters": 7833409536,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 32768,
+      "queryHeads": 32,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Attention globale",
+          "layers": 36,
+          "heads": 8,
+          "keyDim": 128,
+          "valueDim": 128
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "Décodage spéculatif / MTP désactivé dans le calcul des caches. Les poids auxiliaires peuvent être inclus dans le total."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/XiaomiMiMo/MiMo-7B-RL/blob/6299b5a2c45daf0c429285c92b8e61a5bd011c0d/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/XiaomiMiMo/MiMo-7B-RL"
+        }
+      ],
+      "revision": "6299b5a2c45daf0c429285c92b8e61a5bd011c0d"
+    },
+    {
+      "id": "XiaomiMiMo/MiMo-V2.6-Flash-RL",
+      "name": "MiMo-V2.6-Flash-RL",
+      "family": "MiMo · Xiaomi",
+      "architecture": "GQA globale / locale · MoE",
+      "parameters": 311000000000.0,
+      "parameterNote": "Nombre nominal arrondi ; tensors quantifiés empaquetés non utilisés comme nombre de paramètres logiques.",
+      "maxContext": 1048576,
+      "queryHeads": 64,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Attention globale",
+          "layers": 9,
+          "heads": 4,
+          "keyDim": 192,
+          "valueDim": 128
+        },
+        {
+          "kind": "gqa",
+          "label": "Attention locale",
+          "layers": 39,
+          "heads": 8,
+          "keyDim": 192,
+          "valueDim": 128,
+          "window": 128
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "Décodage spéculatif / MTP désactivé dans le calcul des caches. Les poids auxiliaires peuvent être inclus dans le total.",
+        "Les tokens visuels consomment aussi du contexte. Les activations des encodeurs ne sont pas calculées ; prévoir une réserve adaptée."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Flash-RL/blob/dcd3fd83fb181622fbc606fbb1709901982a62c2/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Flash-RL"
+        },
+        {
+          "label": "Convention attention locale",
+          "url": "https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Flash-RL/blob/dcd3fd83fb181622fbc606fbb1709901982a62c2/configuration_mimo_v2.py"
+        }
+      ],
+      "revision": "dcd3fd83fb181622fbc606fbb1709901982a62c2"
+    },
+    {
+      "id": "XiaomiMiMo/MiMo-V2.6-Pro-RL",
+      "name": "MiMo-V2.6-Pro-RL",
+      "family": "MiMo · Xiaomi",
+      "architecture": "GQA globale / locale · MoE",
+      "parameters": 1024000000000.0,
+      "parameterNote": "Nombre nominal arrondi ; tensors quantifiés empaquetés non utilisés comme nombre de paramètres logiques.",
+      "maxContext": 1048576,
+      "queryHeads": 128,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Attention globale",
+          "layers": 10,
+          "heads": 8,
+          "keyDim": 192,
+          "valueDim": 128
+        },
+        {
+          "kind": "gqa",
+          "label": "Attention locale",
+          "layers": 60,
+          "heads": 8,
+          "keyDim": 192,
+          "valueDim": 128,
+          "window": 128
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "Les tokens visuels consomment aussi du contexte. Les activations des encodeurs ne sont pas calculées ; prévoir une réserve adaptée."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Pro-RL/blob/b61f21852680ee02a29e946e18cf8697f4844061/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Pro-RL"
+        },
+        {
+          "label": "Convention attention locale",
+          "url": "https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Pro-RL/blob/b61f21852680ee02a29e946e18cf8697f4844061/configuration_mimo_v2.py"
+        }
+      ],
+      "revision": "b61f21852680ee02a29e946e18cf8697f4844061"
+    },
+    {
+      "id": "mistralai/Ministral-3-8B-Instruct-2512",
+      "name": "Ministral-3-8B-Instruct-2512",
+      "family": "Mistral",
+      "architecture": "GQA",
+      "parameters": 8918026240,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 262144,
+      "queryHeads": 32,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Attention globale",
+          "layers": 34,
+          "heads": 8,
+          "keyDim": 128,
+          "valueDim": 128
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "Les tokens visuels consomment aussi du contexte. Les activations des encodeurs ne sont pas calculées ; prévoir une réserve adaptée."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512/blob/5b26027e7b19eeb4b7352e1fed3926375dd2cb4d/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512"
+        }
+      ],
+      "revision": "5b26027e7b19eeb4b7352e1fed3926375dd2cb4d"
+    },
+    {
+      "id": "mistralai/Devstral-Small-2-24B-Instruct-2512",
+      "name": "Devstral-Small-2-24B-Instruct-2512",
+      "family": "Mistral",
+      "architecture": "GQA",
+      "parameters": 24011361280,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 393216,
+      "queryHeads": 32,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Attention globale",
+          "layers": 40,
+          "heads": 8,
+          "keyDim": 128,
+          "valueDim": 128
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "Les tokens visuels consomment aussi du contexte. Les activations des encodeurs ne sont pas calculées ; prévoir une réserve adaptée."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512/blob/55c5b41e98c2dbd21b0c8afffc540dcfc9eb5128/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512"
+        }
+      ],
+      "revision": "55c5b41e98c2dbd21b0c8afffc540dcfc9eb5128"
+    },
+    {
+      "id": "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+      "name": "Mistral-Small-3.2-24B-Instruct-2506",
+      "family": "Mistral",
+      "architecture": "GQA",
+      "parameters": 24011361280,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 131072,
+      "queryHeads": 32,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Attention globale",
+          "layers": 40,
+          "heads": 8,
+          "keyDim": 128,
+          "valueDim": 128
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "Les tokens visuels consomment aussi du contexte. Les activations des encodeurs ne sont pas calculées ; prévoir une réserve adaptée."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/mistralai/Mistral-Small-3.2-24B-Instruct-2506/blob/95a6d26c4bfb886c58daf9d3f7332c857cb27b43/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/mistralai/Mistral-Small-3.2-24B-Instruct-2506"
+        }
+      ],
+      "revision": "95a6d26c4bfb886c58daf9d3f7332c857cb27b43"
+    },
+    {
+      "id": "mistralai/Mistral-Medium-3.5-128B",
+      "name": "Mistral-Medium-3.5-128B",
+      "family": "Mistral",
+      "architecture": "GQA",
+      "parameters": 127704210176,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 262144,
+      "queryHeads": 96,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Attention globale",
+          "layers": 88,
+          "heads": 8,
+          "keyDim": 128,
+          "valueDim": 128
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "Les tokens visuels consomment aussi du contexte. Les activations des encodeurs ne sont pas calculées ; prévoir une réserve adaptée."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/mistralai/Mistral-Medium-3.5-128B/blob/22b2b868a15677cfa6061277ed2f653d1349a9ab/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/mistralai/Mistral-Medium-3.5-128B"
+        }
+      ],
+      "revision": "22b2b868a15677cfa6061277ed2f653d1349a9ab"
+    },
+    {
+      "id": "mistralai/Mistral-Large-3-675B-Instruct-2512",
+      "name": "Mistral-Large-3-675B",
+      "family": "Mistral",
+      "architecture": "MLA / MoE",
+      "parameters": 675000000000.0,
+      "parameterNote": "Nombre nominal de la fiche officielle, arrondi.",
+      "maxContext": 294912,
+      "queryHeads": 128,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "mla",
+          "label": "Attention MLA compressée",
+          "layers": 61,
+          "latentDim": 512,
+          "ropeDim": 64
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "Déploiement avec backend MLA compressé requis."
+      ],
+      "sources": [
+        {
+          "label": "Paramètres officiels",
+          "url": "https://huggingface.co/mistralai/Mistral-Large-3-675B-Instruct-2512/blob/main/params.json"
+        }
+      ],
+      "revision": "main · vérifié 2026-10-11"
+    },
+    {
+      "id": "mistralai/Mistral-Large-4-1T-A52B",
+      "name": "Mistral Large 4 · poids annoncés",
+      "family": "Mistral",
+      "architecture": "À confirmer",
+      "parameters": 1050000000000.0,
+      "parameterNote": "Annonce constructeur uniquement, non calculable.",
+      "maxContext": 1048576,
+      "queryHeads": 1,
+      "status": "unavailable",
+      "unavailableReason": "Poids annoncés pour le 31 octobre 2026 ; configuration publique du cache indisponible au 11 octobre.",
+      "blocks": [],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [],
+      "sources": [
+        {
+          "label": "Annonce des poids",
+          "url": "https://huggingface.co/mistralai/Mistral-Large-4-1T-A52B"
+        }
+      ],
+      "revision": "Annonce du 11 octobre 2026"
+    },
+    {
+      "id": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "name": "Nemotron-3-Nano-30B-A3B",
+      "family": "NVIDIA",
+      "architecture": "Hybride Mamba / GQA / MoE",
+      "parameters": 31577940288,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 262144,
+      "queryHeads": 32,
+      "status": "experimental",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Attention globale",
+          "layers": 6,
+          "heads": 2,
+          "keyDim": 128,
+          "valueDim": 128
+        },
+        {
+          "kind": "state",
+          "label": "États Mamba FP32 + convolution FP16",
+          "bytes": 49364992
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "États récurrents : N_M × (H × D × S × 4 + (H × D + 2 × G × S) × K × 2). Pas de préfixes récurrents multiples ni MTP."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16/blob/bf77c3174f68ad409e1c2aa60daeb46e32d1c606/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+        }
+      ],
+      "revision": "bf77c3174f68ad409e1c2aa60daeb46e32d1c606"
+    },
+    {
+      "id": "nvidia/Llama-3.3-Nemotron-Super-49B-v1",
+      "name": "Llama-3.3-Nemotron-Super-49B-v1",
+      "family": "NVIDIA",
+      "architecture": "GQA élaguée",
+      "parameters": 49867145216,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 131072,
+      "queryHeads": 64,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Couches d’attention conservées",
+          "layers": 49,
+          "heads": 8,
+          "keyDim": 128,
+          "valueDim": 128
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/nvidia/Llama-3.3-Nemotron-Super-49B-v1/blob/387156d8d6868c19f3472fa607aa9bfc4f662333/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/nvidia/Llama-3.3-Nemotron-Super-49B-v1"
+        }
+      ],
+      "revision": "387156d8d6868c19f3472fa607aa9bfc4f662333"
+    },
+    {
+      "id": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
+      "name": "Nemotron-3-Super-120B-A12B",
+      "family": "NVIDIA",
+      "architecture": "Hybride Mamba / GQA / MoE",
+      "parameters": 123611033088,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 262144,
+      "queryHeads": 32,
+      "status": "experimental",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Attention globale",
+          "layers": 8,
+          "heads": 2,
+          "keyDim": 128,
+          "valueDim": 128
+        },
+        {
+          "kind": "state",
+          "label": "États Mamba FP32 + convolution FP16",
+          "bytes": 171048960
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "États récurrents : N_M × (H × D × S × 4 + (H × D + 2 × G × S) × K × 2). Pas de préfixes récurrents multiples ni MTP.",
+        "Décodage spéculatif / MTP désactivé dans le calcul des caches. Les poids auxiliaires peuvent être inclus dans le total."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16/blob/2dc98e2afe4face0e4ce40972a915c45368bd34a/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16"
+        }
+      ],
+      "revision": "2dc98e2afe4face0e4ce40972a915c45368bd34a"
+    },
+    {
+      "id": "Qwen/Qwen3-8B",
+      "name": "Qwen3-8B",
+      "family": "Qwen",
+      "architecture": "GQA",
+      "parameters": 8190735360,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 40960,
+      "queryHeads": 32,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Attention globale",
+          "layers": 36,
+          "heads": 8,
+          "keyDim": 128,
+          "valueDim": 128
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/Qwen/Qwen3-8B/blob/b968826d9c46dd6066d109eabc6255188de91218/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/Qwen/Qwen3-8B"
+        }
+      ],
+      "revision": "b968826d9c46dd6066d109eabc6255188de91218"
+    },
+    {
+      "id": "Qwen/Qwen3-32B",
+      "name": "Qwen3-32B",
+      "family": "Qwen",
+      "architecture": "GQA",
+      "parameters": 32762123264,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 40960,
+      "queryHeads": 64,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Attention globale",
+          "layers": 64,
+          "heads": 8,
+          "keyDim": 128,
+          "valueDim": 128
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/Qwen/Qwen3-32B/blob/9216db5781bf21249d130ec9da846c4624c16137/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/Qwen/Qwen3-32B"
+        }
+      ],
+      "revision": "9216db5781bf21249d130ec9da846c4624c16137"
+    },
+    {
+      "id": "Qwen/Qwen3.5-35B-A3B",
+      "name": "Qwen3.5-35B-A3B",
+      "family": "Qwen",
+      "architecture": "Hybride Gated DeltaNet / GQA / MoE",
+      "parameters": 35951822704,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 262144,
+      "queryHeads": 16,
+      "status": "experimental",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Attention globale",
+          "layers": 10,
+          "heads": 2,
+          "keyDim": 256,
+          "valueDim": 256
+        },
+        {
+          "kind": "state",
+          "label": "États DeltaNet FP32 + convolution FP16",
+          "bytes": 64880640
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [
+        "Allocation récurrente estimée avec états FP32 et convolution FP16 ; aucune quantification des états.",
+        "Décodage spéculatif / MTP désactivé dans le calcul des caches. Les poids auxiliaires peuvent être inclus dans le total.",
+        "Les tokens visuels consomment aussi du contexte. Les activations des encodeurs ne sont pas calculées ; prévoir une réserve adaptée."
+      ],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/Qwen/Qwen3.5-35B-A3B/blob/59d61f3ce65a6d9863b86d2e96597125219dc754/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/Qwen/Qwen3.5-35B-A3B"
+        }
+      ],
+      "revision": "59d61f3ce65a6d9863b86d2e96597125219dc754"
+    },
+    {
+      "id": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+      "name": "Qwen3-235B-A22B-Instruct-2507",
+      "family": "Qwen",
+      "architecture": "GQA / MoE",
+      "parameters": 235093634560,
+      "parameterNote": "Somme des paramètres flottants exposés par les métadonnées Safetensors du dépôt ; peut inclure encodeurs et têtes auxiliaires.",
+      "maxContext": 262144,
+      "queryHeads": 64,
+      "status": "estimated",
+      "blocks": [
+        {
+          "kind": "gqa",
+          "label": "Attention globale",
+          "layers": 94,
+          "heads": 4,
+          "keyDim": 128,
+          "valueDim": 128
+        }
+      ],
+      "weightFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4",
+        "nvfp4"
+      ],
+      "kvFormats": [
+        "fp16",
+        "bf16",
+        "fp8",
+        "int8",
+        "int4"
+      ],
+      "notes": [],
+      "sources": [
+        {
+          "label": "Configuration officielle",
+          "url": "https://huggingface.co/Qwen/Qwen3-235B-A22B-Instruct-2507/blob/ac9c66cc9b46af7306746a9250f23d47083d689e/config.json"
+        },
+        {
+          "label": "Fiche modèle et licence",
+          "url": "https://huggingface.co/Qwen/Qwen3-235B-A22B-Instruct-2507"
+        }
+      ],
+      "revision": "ac9c66cc9b46af7306746a9250f23d47083d689e"
+    }
+  ]
+}
