@@ -100,7 +100,10 @@ export interface Estimate {
     reservePerGpuBytes: number;
     usablePerGpuBytes: number;
     freeForKvPerGpuBytes: number;
+    /** Mémoire libre physique totale : N × mémoire utilisable − poids physiques (réplications comprises). */
     freeForKvTotalBytes: number;
+    /** Budget prudent : mémoire libre du GPU le plus chargé × N (base du nombre de sessions). */
+    kvBudgetTotalBytes: number;
   };
   offload: {
     totalBytes: number;
@@ -348,7 +351,8 @@ export function estimate(input: EstimateInput): Estimate {
       reservePerGpuBytes,
       usablePerGpuBytes,
       freeForKvPerGpuBytes,
-      freeForKvTotalBytes: freeForKvPerGpuBytes * n,
+      freeForKvTotalBytes: Math.max(0, usablePerGpuBytes * n - (w.bytes + replicatedBytes)),
+      kvBudgetTotalBytes: freeForKvPerGpuBytes * n,
     },
     offload: { totalBytes: offloadTotal, parkedSessions, reloadMs },
     modelPlusOneKvBytes: w.bytes + perRequestBytes,

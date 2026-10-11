@@ -1037,3 +1037,7 @@ h3 {
   color: var(--accent);
   text-decoration: none;
 }
+
+.kpi.bad .kpi-big {
+  color: var(--bad);
+}

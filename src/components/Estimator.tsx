@@ -193,6 +193,8 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
   const input = useMemo(() => resolveScenario(config, models, { ...s, modelId: model.id })!, [config, models, s, model.id]);
   const est = useMemo(() => estimate(input), [input]);
   const issues = useMemo(() => collectIssues(input, est, config.weightFormats), [input, est, config.weightFormats]);
+  /** Erreur bloquante (format, parallélisme, contexte…) : les chiffres restent affichés mais sans statut de réussite. */
+  const blocking = issues.some((i) => i.severity === "error");
   const perf = useMemo(() => estimatePerf(input, est, config.performance), [input, est, config.performance]);
   const byContext = useMemo(() => CONTEXT_STEPS.map((t) => ({ t, e: estimate({ ...input, contextTokens: t }) })), [input]);
   const command = launchCommand(input, est.tp, est.pp);
@@ -330,7 +332,9 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
         kvPerRequestGiB: est.kv.perRequestBytes / GIB,
         kvPerRequestClusterGiB: est.kv.perRequestClusterBytes / GIB,
         modelPlusOneKvGiB: est.modelPlusOneKvBytes / GIB,
-        freeKvTotalGiB: est.memory.freeForKvTotalBytes / GIB,
+        freeKvPhysicalTotalGiB: est.memory.freeForKvTotalBytes / GIB,
+        kvBudgetTotalGiB: est.memory.kvBudgetTotalBytes / GIB,
+        valid: !blocking,
         sessions: est.sessions,
         offloadParkedSessions: est.offload.parkedSessions,
         decodeTokPerSecSingle: perf.single.tokPerSecPerSession,
@@ -559,28 +563,36 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
               value={fmtBytes(est.physicalOneRequestBytes)}
               sub={[
                 est.physicalOneRequestBytes > est.modelPlusOneKvBytes * 1.001 ? `occupation réelle · somme logique ${fmtBytes(est.modelPlusOneKvBytes)}` : null,
-                `${est.fitsOneRequest ? "✓ tient" : "✕ ne tient pas"} (${s.gpuCount > 1 ? `GPU le plus chargé : ${fmtBytes(est.weights.perGpuBytes + est.kv.perRequestPerGpuBytes)} / ${fmtBytes(est.memory.usablePerGpuBytes)}` : `${fmtBytes(est.memory.usablePerGpuBytes)} utilisables`})`,
+                blocking
+                  ? `capacité mémoire théorique (${est.fitsOneRequest ? "tiendrait" : "ne tient pas"}) — configuration invalide`
+                  : `${est.fitsOneRequest ? "✓ tient" : "✕ ne tient pas"} (${s.gpuCount > 1 ? `GPU le plus chargé : ${fmtBytes(est.weights.perGpuBytes + est.kv.perRequestPerGpuBytes)} / ${fmtBytes(est.memory.usablePerGpuBytes)}` : `${fmtBytes(est.memory.usablePerGpuBytes)} utilisables`})`,
               ]
                 .filter(Boolean)
                 .join(" · ")}
-              tone={est.fitsOneRequest ? "good" : "bad"}
+              tone={blocking || !est.fitsOneRequest ? "bad" : "good"}
             />
             <Kpi
               title="KV total disponible"
               value={fmtBytes(est.memory.freeForKvTotalBytes)}
-              big={`${fmtInt(est.sessions)} session${est.sessions > 1 ? "s" : ""}`}
-              sub={
+              big={`${fmtInt(est.sessions)} session${est.sessions > 1 ? "s" : ""}${blocking ? " (théorique)" : ""}`}
+              sub={[
+                blocking ? "capacité mémoire théorique — configuration invalide" : null,
+                est.memory.kvBudgetTotalBytes < est.memory.freeForKvTotalBytes * 0.999
+                  ? `mémoire libre physique · budget prudent ${fmtBytes(est.memory.kvBudgetTotalBytes)} (GPU le plus chargé × ${s.gpuCount})`
+                  : null,
                 est.sessions > 0
                   ? `à ${contextLabel(ctx)} · ≈ ${fmtTokens(est.sessions * ctx)} tokens cumulés${est.offload.parkedSessions ? ` · +${fmtInt(est.offload.parkedSessions)} en RAM CPU` : ""}`
-                  : "aucune session complète"
-              }
-              tone={est.sessions > 0 ? "good" : "bad"}
+                  : "aucune session complète",
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+              tone={blocking || est.sessions === 0 ? "bad" : "good"}
             />
           </div>
 
           <button type="button" className="perf-strip" onClick={() => selectTab("perf")} title="Voir le détail du débit">
             <span>
-              ⚡ Débit estimé : <strong>{fmtRate(perf.single.tokPerSecPerSession)}</strong> pour 1 session
+              ⚡ Débit estimé{blocking ? " (théorique, configuration invalide)" : ""} : <strong>{fmtRate(perf.single.tokPerSecPerSession)}</strong> pour 1 session
             </span>
             {perf.full && (
               <span>

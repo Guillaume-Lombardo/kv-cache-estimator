@@ -246,6 +246,24 @@ describe("review e00a496", async () => {
   });
 });
 
+describe("review 0e5ac67", async () => {
+  const cfg = await load();
+  it("mémoire libre physique totale distincte du budget prudent en PP", () => {
+    const e = estimate(input(cfg, { model: "qwen3-8b", gpu: "h200", gpuCount: 8, tp: 1 }));
+    const physical = 8 * e.memory.usablePerGpuBytes - e.weights.totalBytes;
+    expect(e.memory.freeForKvTotalBytes).toBeCloseTo(physical, 0);
+    expect(e.memory.freeForKvTotalBytes / GIB).toBeCloseTo(995.62, 1);
+    expect(e.memory.kvBudgetTotalBytes / GIB).toBeCloseTo(987.23, 1);
+    expect(e.sessions).toBe(Math.floor(e.memory.freeForKvPerGpuBytes / e.kv.perRequestPerGpuBytes));
+  });
+  it("TP pur et DP-attention : les deux valeurs coïncident", () => {
+    for (const o of [{ gpuCount: 8 }, { model: "qwen3-30b-a3b-2507", gpuCount: 8, mode: "dp-ep" as const }]) {
+      const e = estimate(input(cfg, { gpu: "h200", ...o }));
+      expect(e.memory.kvBudgetTotalBytes).toBeCloseTo(e.memory.freeForKvTotalBytes, 0);
+    }
+  });
+});
+
 describe("performance", async () => {
   const cfg = await load();
   it("décodage limité par la mémoire : ~ bande passante / octets lus", () => {
