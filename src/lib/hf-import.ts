@@ -3,7 +3,10 @@
  * Used by `pnpm run import-model` and the UI import panel.
  */
 import { Document, isMap, isSeq } from "yaml";
-import type { LayerGroup, ModelInput } from "./config-schema";
+import type { ModelInput } from "./config-schema";
+import { tr, type Lang } from "./i18n";
+
+type LayerGroup = ModelInput["layers"][number];
 
 type Json = Record<string, unknown>;
 
@@ -17,13 +20,15 @@ export interface ImportOptions {
   /** Total parameters, in billions (overrides metadata and estimates). */
   paramsB?: number;
   activeParamsB?: number;
+  /** Language of warnings and errors (French by default). Model text is written in both languages. */
+  lang?: Lang;
 }
 
 export interface ImportResult {
   model: ModelInput;
   warnings: string[];
   /** Source of the parameter count. */
-  paramsSource: "option" | "métadonnées safetensors" | "nom du dépôt" | "estimation";
+  paramsSource: "option" | "safetensors" | "repo-name" | "estimate";
 }
 
 const FAMILIES: Record<string, string> = {
@@ -172,8 +177,11 @@ function parseNominalParams(text: string): number | undefined {
 
 export function convertHfConfig(input: unknown, opts: ImportOptions = {}): ImportResult {
   const warnings: string[] = [];
+  const t_ = tr(opts.lang ?? "fr");
+  /** Warnings that lower the confidence of the result. */
+  let uncertain = false;
   const root = obj(input);
-  if (!root) throw new Error("Le fichier doit contenir un objet JSON.");
+  if (!root) throw new Error(t_("Le fichier doit contenir un objet JSON.", "The file must contain a JSON object."));
 
   // Envelope { repo, revision, config, parameterMetadata } (config/upstream/ snapshots).
   const wrapped = obj(root.config) && (root.repo !== undefined || root.parameterMetadata !== undefined);
@@ -190,14 +198,14 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
   const H = num(t.hidden_size) ?? num(t.d_model);
   const L = num(t.num_hidden_layers) ?? num(t.num_layers);
   const heads = num(t.num_attention_heads);
-  if (!H || !L || !heads) throw new Error("Champs hidden_size, num_hidden_layers ou num_attention_heads introuvables.");
+  if (!H || !L || !heads) throw new Error(t_("Champs hidden_size, num_hidden_layers ou num_attention_heads introuvables.", "hidden_size, num_hidden_layers or num_attention_heads fields not found."));
   t.hidden_size = H;
   t.num_hidden_layers = L;
   const kvHeads = num(t.num_key_value_heads) ?? heads;
   const headDim = num(t.head_dim) || Math.round(H / heads);
   const vDim = num(t.v_head_dim);
   const vocab = num(t.vocab_size);
-  if (!vocab) throw new Error("vocab_size introuvable.");
+  if (!vocab) throw new Error(t_("vocab_size introuvable.", "vocab_size not found."));
   const tied = Boolean(t.tie_word_embeddings ?? cfg.tie_word_embeddings ?? false);
   const window = num(t.sliding_window_size) ?? num(t.sliding_window);
   const gqa = (count: number, kv: number, hd: number, hdv?: number) =>
@@ -225,22 +233,22 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
     const st = num(t.ssm_state_size) ?? 128;
     const ng = num(t.n_groups) ?? 1;
     const k = num(t.conv_kernel) ?? 4;
-    if (linearCount) groups.push({ kind: "linear", count: linearCount, ssmElements: mh * md * st, convElements: (k - 1) * (mh * md + 2 * ng * st), label: "Mamba-2 (état constant)" });
+    if (linearCount) groups.push({ kind: "linear", count: linearCount, ssmElements: mh * md * st, convElements: (k - 1) * (mh * md + 2 * ng * st), label: { fr: "Mamba-2 (état constant)", en: "Mamba-2 (constant state)" } });
     linearParamsPerLayer = H * (2 * mh * md + 2 * ng * st + mh) + mh * md * H;
     const attn = [...p].filter((c) => c === "*").length;
     if (attn) groups.push(gqa(attn, kvHeads, headDim));
-    if (ssmDtype !== "float32") warnings.push("Type des états Mamba non précisé : 16 bits supposés (vLLM --mamba-ssm-cache-dtype).");
+    if (ssmDtype !== "float32") warnings.push(t_("Type des états Mamba non précisé : 16 bits supposés (vLLM --mamba-ssm-cache-dtype).", "Mamba state type not specified: 16 bits assumed (vLLM --mamba-ssm-cache-dtype)."));
   } else if (linCfg && Array.isArray(linCfg.kda_layers)) {
     // Kimi Delta Attention (Kimi Linear / K3, GLM-5.3-Flash).
     linearCount = (linCfg.kda_layers as unknown[]).length;
     const h = num(linCfg.num_heads) ?? heads;
     const d = num(linCfg.head_dim) ?? 128;
     const k = num(linCfg.short_conv_kernel_size) ?? 4;
-    groups.push({ kind: "linear", count: linearCount, ssmElements: h * d * d, convElements: (k - 1) * 3 * h * d, label: "KDA (état constant)" });
+    groups.push({ kind: "linear", count: linearCount, ssmElements: h * d * d, convElements: (k - 1) * 3 * h * d, label: { fr: "KDA (état constant)", en: "KDA (constant state)" } });
     linearParamsPerLayer = 6 * H * h * d; // q, k, v, o + gates
     if (ssmDtype !== "float32") {
       ssmStateBytes = 4;
-      warnings.push("États KDA supposés en FP32 (hypothèse prudente).");
+      warnings.push(t_("États KDA supposés en FP32 (hypothèse prudente).", "KDA states assumed to be FP32 (conservative assumption)."));
     }
   } else if (countType(/linear/) > 0 || (num(t.linear_num_value_heads) && num(t.full_attention_interval))) {
     // Gated DeltaNet (Qwen3-Next, Qwen3.5).
@@ -250,7 +258,7 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
     const kd = num(t.linear_key_head_dim) ?? 128;
     const vd = num(t.linear_value_head_dim) ?? 128;
     const k = num(t.linear_conv_kernel_dim) ?? 4;
-    groups.push({ kind: "linear", count: linearCount, ssmElements: vh * kd * vd, convElements: (k - 1) * (2 * kh * kd + vh * vd), label: "Gated DeltaNet (état constant)" });
+    groups.push({ kind: "linear", count: linearCount, ssmElements: vh * kd * vd, convElements: (k - 1) * (2 * kh * kd + vh * vd), label: { fr: "Gated DeltaNet (état constant)", en: "Gated DeltaNet (constant state)" } });
     linearParamsPerLayer = H * (2 * kh * kd + 2 * vh * vd + 2 * vh) + vh * vd * H;
   }
 
@@ -306,17 +314,24 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
     const interval = num(t.nope_layer_interval) ?? 4;
     const full = Math.floor(L / interval);
     groups.push(swa(L - full, kvHeads, headDim, num(t.attention_chunk_size) as number, vDim), gqa(full, kvHeads, headDim, vDim));
-    warnings.push("Attention par chunks modélisée comme une fenêtre glissante de la taille du chunk.");
+    warnings.push(t_("Attention par chunks modélisée comme une fenêtre glissante de la taille du chunk.", "Chunked attention modeled as a sliding window of the chunk size."));
   } else if (L - linearCount > 0) {
     groups.push(gqa(L - linearCount, kvHeads, headDim, vDim));
-    if (window && t.use_sliding_window === undefined && !layerTypes)
-      warnings.push(`sliding_window = ${window} présent sans layer_types : vérifiez si toutes les couches utilisent une fenêtre glissante.`);
+    if (window && t.use_sliding_window === undefined && !layerTypes) {
+      uncertain = true;
+      warnings.push(
+        t_(
+          `sliding_window = ${window} présent sans layer_types : vérifiez si toutes les couches utilisent une fenêtre glissante.`,
+          `sliding_window = ${window} present without layer_types: check whether every layer uses a sliding window.`,
+        ),
+      );
+    }
   }
-  if (!groups.length) throw new Error("Aucune couche à cache détectée.");
+  if (!groups.length) throw new Error(t_("Aucune couche à cache détectée.", "No cache-bearing layer detected."));
 
   // --- Parameters
   const est = estimateParams(t, groups, tied, linearParamsPerLayer);
-  let paramsSource: ImportResult["paramsSource"] = "estimation";
+  let paramsSource: ImportResult["paramsSource"] = "estimate";
   let paramsB = est.total / 1e9;
   const metaParams = obj(meta?.parameters);
   const packed = metaParams && Object.keys(metaParams).some((k) => /^(U8|I8|I32|I64)$/.test(k));
@@ -326,21 +341,42 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
     paramsSource = "option";
   } else if (meta && num(meta.total) && !packed) {
     paramsB = (num(meta.total) as number) / 1e9;
-    paramsSource = "métadonnées safetensors";
+    paramsSource = "safetensors";
   } else if (nominal && (packed || Math.abs(nominal - paramsB) / nominal > 0.35)) {
     // Unreliable estimate (packed tensors or unrecognized architecture): keep the nominal value.
     paramsB = nominal;
-    paramsSource = "nom du dépôt";
-    warnings.push(`Nombre de paramètres nominal pris dans le nom du dépôt (${nominal} B) ; l'estimation par dimensions donne ${round(est.total / 1e9, 1)} B.`);
+    paramsSource = "repo-name";
+    warnings.push(
+      t_(
+        `Nombre de paramètres nominal pris dans le nom du dépôt (${nominal} B) ; l'estimation par dimensions donne ${round(est.total / 1e9, 1)} B.`,
+        `Nominal parameter count taken from the repository name (${nominal} B); the estimate from dimensions gives ${round(est.total / 1e9, 1)} B.`,
+      ),
+    );
   } else if (!nominal) {
-    warnings.push(`Nombre de paramètres estimé à partir des dimensions (${round(paramsB, 1)} B) : précisez --params si vous le connaissez.`);
+    uncertain = true;
+    warnings.push(
+      t_(
+        `Nombre de paramètres estimé à partir des dimensions (${round(paramsB, 1)} B) : précisez --params si vous le connaissez.`,
+        `Parameter count estimated from dimensions (${round(paramsB, 1)} B): pass --params if you know it.`,
+      ),
+    );
   }
   const ratio = paramsB / (est.total / 1e9);
   const experts = num(t.n_routed_experts) ?? num(t.num_experts) ?? num(t.num_local_experts) ?? 0;
   const activeB = opts.activeParamsB ?? (experts ? (est.active / 1e9) * Math.min(1.5, Math.max(0.67, ratio)) : undefined);
-  if (experts && !opts.activeParamsB) warnings.push(`Paramètres actifs estimés (${round(activeB as number, 1)} B).`);
-  if (Math.abs(ratio - 1) > 0.15 && paramsSource !== "estimation")
-    warnings.push(`L'estimation par dimensions (${round(est.total / 1e9, 1)} B) s'écarte de ${Math.round((ratio - 1) * 100)} % du nombre retenu : architecture partiellement reconnue.`);
+  if (experts && !opts.activeParamsB) {
+    uncertain = true;
+    warnings.push(t_(`Paramètres actifs estimés (${round(activeB as number, 1)} B).`, `Active parameters estimated (${round(activeB as number, 1)} B).`));
+  }
+  if (Math.abs(ratio - 1) > 0.15 && paramsSource !== "estimate") {
+    uncertain = true;
+    warnings.push(
+      t_(
+        `L'estimation par dimensions (${round(est.total / 1e9, 1)} B) s'écarte de ${Math.round((ratio - 1) * 100)} % du nombre retenu : architecture partiellement reconnue.`,
+        `The estimate from dimensions (${round(est.total / 1e9, 1)} B) differs by ${Math.round((ratio - 1) * 100)}% from the retained count: architecture partially recognized.`,
+      ),
+    );
+  }
 
   // --- Native format
   const q = obj(t.quantization_config) ?? obj(cfg.quantization_config);
@@ -354,7 +390,12 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
   // --- Context
   const maxPos = num(t.max_position_embeddings) ?? num(t.max_seq_len) ?? 32768;
   const rope = obj(t.rope_scaling) ?? obj(t.rope_parameters);
-  if (!rope?.factor && maxPos <= 65536) warnings.push("Pas d'extension RoPE déclarée : renseignez maxContextExtended si le modèle supporte YaRN.");
+  if (!rope?.factor && maxPos <= 65536) warnings.push(
+      t_(
+        "Pas d'extension RoPE déclarée : renseignez maxContextExtended si le modèle supporte YaRN.",
+        "No RoPE extension declared: set maxContextExtended if the model supports YaRN.",
+      ),
+    );
 
   const repoName = repo?.split("/").pop();
   const name = opts.name ?? repoName ?? String(t.model_type ?? "modèle importé");
@@ -388,8 +429,8 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
     officialWeightFormats: [nativeFmt.format],
     ...(ssmStateBytes !== 2 ? { ssmStateBytes } : {}),
     tags,
-    notes: ["Importé depuis config.json."],
-    confidence: warnings.some((w) => w.includes("estimé") || w.includes("partiellement") || w.includes("vérifiez")) ? "medium" : "high",
+    notes: [{ fr: "Importé depuis config.json.", en: "Imported from config.json." }],
+    confidence: uncertain ? "medium" : "high",
   };
   return { model, warnings, paramsSource };
 }
@@ -405,7 +446,11 @@ export function modelToYaml(model: ModelInput): string {
       if (isSeq(layers)) for (const it of layers.items) if (isMap(it)) it.flow = true;
       for (const key of ["officialWeightFormats", "tags", "notes"]) {
         const v = m.get(key, true);
-        if (isSeq(v)) v.flow = true;
+        if (!isSeq(v)) continue;
+        // Per-language notes ({ fr, en }) go one per line.
+        if (v.items.some(isMap)) {
+          for (const it of v.items) if (isMap(it)) it.flow = true;
+        } else v.flow = true;
       }
     }
   }

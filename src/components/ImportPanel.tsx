@@ -1,10 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { modelSchema, type ModelSpec } from "@/lib/config-schema";
-import { convertHfConfig, modelToYaml, type ImportResult } from "@/lib/hf-import";
-import { fmtParams } from "@/lib/format";
+import { modelSchema, type ModelSource, type ModelSpec } from "@/lib/config-schema";
+import { modelToYaml, type ImportResult } from "@/lib/hf-import";
 import { z } from "zod";
+import { buildImportPreview, type ImportPreview } from "@/lib/import-preview";
+import { usePrefs } from "./Prefs";
+
+const PARAMS_SOURCE: Record<ImportResult["paramsSource"], { fr: string; en: string }> = {
+  option: { fr: "option", en: "option" },
+  safetensors: { fr: "métadonnées safetensors", en: "safetensors metadata" },
+  "repo-name": { fr: "nom du dépôt", en: "repository name" },
+  estimate: { fr: "estimation", en: "estimate" },
+};
 
 export function ImportPanel({
   existingIds,
@@ -14,40 +22,36 @@ export function ImportPanel({
 }: {
   existingIds: Set<string>;
   imported: ModelSpec[];
-  onAdd: (m: ModelSpec) => void;
+  onAdd: (m: ModelSource) => void;
   onClear: () => void;
 }) {
+  const { lang, t, fmt } = usePrefs();
   const [text, setText] = useState("");
   const [source, setSource] = useState("");
   const [params, setParams] = useState("");
   const [active, setActive] = useState("");
-  const [result, setResult] = useState<ImportResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const result = preview?.[lang].result ?? null;
+  const error = preview?.[lang].error ?? validationError;
   const [copied, setCopied] = useState(false);
 
   const convert = (raw = text) => {
     setCopied(false);
-    try {
-      const json = JSON.parse(raw);
-      const r = convertHfConfig(json, {
-        source: source.trim() || undefined,
-        paramsB: params ? Number(params) : undefined,
-        activeParamsB: active ? Number(active) : undefined,
-      });
-      if (existingIds.has(r.model.id)) r.model.id = `${r.model.id}-import`;
-      setResult(r);
-      setError(null);
-    } catch (e) {
-      setResult(null);
-      setError((e as Error).message);
-    }
+    setValidationError(null);
+    // Store both translations of this submission; switching language must not submit pending edits.
+    setPreview(buildImportPreview(raw, {
+      source: source.trim() || undefined,
+      paramsB: params ? Number(params) : undefined,
+      activeParamsB: active ? Number(active) : undefined,
+    }, existingIds));
   };
 
   const onFile = async (f: File | undefined) => {
     if (!f) return;
-    const t = await f.text();
-    setText(t);
-    convert(t);
+    const content = await f.text();
+    setText(content);
+    convert(content);
   };
 
   const yaml = result ? modelToYaml(result.model) : "";
@@ -55,7 +59,7 @@ export function ImportPanel({
     if (!result) return;
     const parsed = modelSchema.safeParse(result.model);
     if (!parsed.success) {
-      setError(z.prettifyError(parsed.error));
+      setValidationError(z.prettifyError(parsed.error));
       return;
     }
     onAdd(parsed.data);
@@ -63,33 +67,39 @@ export function ImportPanel({
 
   return (
     <div>
-      <h3>Importer un config.json</h3>
+      <h3>{t("Importer un config.json", "Import a config.json")}</h3>
       <p className="hint">
-        Collez le <code>config.json</code> d&apos;un dépôt Hugging Face (ou le <code>params.json</code> de Mistral). L&apos;outil détecte l&apos;architecture (GQA, fenêtre
-        glissante, MLA, DSA, Mamba, DeltaNet, KDA), estime les paramètres si besoin et produit l&apos;entrée YAML à ajouter au fichier de configuration. Équivalent en ligne
-        de commande : <code>pnpm run import-model config.json --append</code>.
+        {t("Collez le ", "Paste the ")}
+        <code>config.json</code>
+        {t(" d'un dépôt Hugging Face (ou le ", " of a Hugging Face repository (or Mistral's ")}
+        <code>params.json</code>
+        {t(
+          " de Mistral). L'outil détecte l'architecture (GQA, fenêtre glissante, MLA, DSA, Mamba, DeltaNet, KDA), estime les paramètres si besoin et produit l'entrée YAML à ajouter au fichier de configuration. Équivalent en ligne de commande : ",
+          "). The tool detects the architecture (GQA, sliding window, MLA, DSA, Mamba, DeltaNet, KDA), estimates the parameters if needed and produces the YAML entry to add to the configuration file. Command-line equivalent: ",
+        )}
+        <code>pnpm run import-model config.json --append</code>.
       </p>
       <div className="import-grid">
         <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder='{ "architectures": ["…"], "hidden_size": … }' spellCheck={false} rows={10} />
         <div className="import-side">
           <label>
-            Fichier
+            {t("Fichier", "File")}
             <input type="file" accept=".json,application/json" onChange={(e) => onFile(e.target.files?.[0])} />
           </label>
           <label>
-            Dépôt (org/nom)
+            {t("Dépôt (org/nom)", "Repository (org/name)")}
             <input type="text" value={source} onChange={(e) => setSource(e.target.value)} placeholder="Qwen/Qwen3-8B" />
           </label>
           <label>
-            Paramètres totaux (B)
+            {t("Paramètres totaux (B)", "Total parameters (B)")}
             <input type="number" value={params} onChange={(e) => setParams(e.target.value)} placeholder="auto" />
           </label>
           <label>
-            Paramètres actifs (B)
+            {t("Paramètres actifs (B)", "Active parameters (B)")}
             <input type="number" value={active} onChange={(e) => setActive(e.target.value)} placeholder="auto" />
           </label>
           <button type="button" className="btn primary" onClick={() => convert()} disabled={!text.trim()}>
-            Convertir
+            {t("Convertir", "Convert")}
           </button>
         </div>
       </div>
@@ -97,8 +107,8 @@ export function ImportPanel({
       {result && (
         <div className="import-result">
           <p>
-            <strong>{result.model.name}</strong> — {fmtParams(result.model.paramsB)} paramètres ({result.paramsSource})
-            {result.model.activeParamsB ? `, ${fmtParams(result.model.activeParamsB)} actifs` : ""} ·{" "}
+            <strong>{result.model.name}</strong> — {fmt.params(result.model.paramsB)} {t("paramètres", "parameters")} ({PARAMS_SOURCE[result.paramsSource][lang]})
+            {result.model.activeParamsB ? `, ${fmt.params(result.model.activeParamsB)} ${t("actifs", "active")}` : ""} ·{" "}
             {result.model.layers.map((l) => `${l.count} ${l.kind}`).join(" + ")}
           </p>
           {result.warnings.length > 0 && (
@@ -122,22 +132,28 @@ export function ImportPanel({
                 }
               }}
             >
-              {copied ? "✓ Copié" : "Copier le YAML"}
+              {copied ? t("✓ Copié", "✓ Copied") : t("Copier le YAML", "Copy the YAML")}
             </button>
             <button type="button" className="btn primary" onClick={add}>
-              Utiliser dans l&apos;estimateur
+              {t("Utiliser dans l'estimateur", "Use in the estimator")}
             </button>
           </div>
           <p className="hint">
-            « Utiliser » ajoute le modèle à la liste pour ce navigateur uniquement. Pour le partager, collez le YAML sous <code>models:</code> dans le fichier de configuration.
+            {t(
+              "« Utiliser » ajoute le modèle à la liste pour ce navigateur uniquement. Pour le partager, collez le YAML sous ",
+              "“Use” adds the model to the list for this browser only. To share it, paste the YAML under ",
+            )}
+            <code>models:</code>
+            {t(" dans le fichier de configuration.", " in the configuration file.")}
           </p>
         </div>
       )}
       {imported.length > 0 && (
         <p className="hint">
-          Modèles importés dans ce navigateur : {imported.map((m) => m.name).join(", ")}.{" "}
+          {t("Modèles importés dans ce navigateur : ", "Models imported in this browser: ")}
+          {imported.map((m) => m.name).join(", ")}.{" "}
           <button type="button" className="link" onClick={onClear}>
-            Tout retirer
+            {t("Tout retirer", "Remove all")}
           </button>
         </p>
       )}

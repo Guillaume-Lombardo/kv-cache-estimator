@@ -2,9 +2,9 @@
 
 import { collectIssues, contextLabel, estimate } from "@/lib/calc";
 import type { AppConfig, ModelSpec } from "@/lib/config-schema";
-import { fmtBytes, fmtInt, fmtRate } from "@/lib/format";
 import { estimatePerf } from "@/lib/perf";
 import { resolveScenario, type Scenario } from "@/lib/scenario";
+import { usePrefs } from "./Prefs";
 
 interface Column {
   key: string;
@@ -29,9 +29,10 @@ export function ComparePanel({
   onRemove: (i: number) => void;
   onLoad: (s: Scenario) => void;
 }) {
+  const { lang, t, fmt } = usePrefs();
   const cols: Column[] = [{ key: "current", scenario: current, current: true }, ...pinned.map((s, i) => ({ key: `p${i}`, scenario: s, current: false }))];
   const data = cols.map((c) => {
-    const input = resolveScenario(config, models, c.scenario);
+    const input = resolveScenario(config, models, c.scenario, lang);
     if (!input) return { c, input: null };
     const est = estimate(input);
     const perf = estimatePerf(input, est, config.performance);
@@ -42,39 +43,46 @@ export function ComparePanel({
   const best = Math.max(0, ...data.filter((d) => d.est && !d.errors).map((d) => d.est!.sessions));
 
   const rows: { label: string; cell: (d: (typeof data)[number]) => React.ReactNode }[] = [
-    { label: "Modèle", cell: (d) => d.input?.model.name },
-    { label: "Cartes", cell: (d) => d.input && `${d.input.gpuCount} × ${d.input.gpu.name}` },
-    { label: "Moteur", cell: (d) => d.input?.engine.name },
-    { label: "Parallélisme", cell: (d) => d.est && (d.input?.mode === "dp-ep" ? "DP-attention + EP" : d.input?.gpuCount === 1 ? "—" : `TP ${d.est.tp} × PP ${d.est.pp}`) },
-    { label: "Poids / KV", cell: (d) => d.input && `${d.input.weightFormat.label} / ${d.input.kvFormat.label}` },
-    { label: "Contexte", cell: (d) => d.input && contextLabel(d.input.contextTokens) },
-    { label: "Poids du modèle", cell: (d) => d.est && fmtBytes(d.est.weights.totalBytes) },
-    { label: "KV par requête", cell: (d) => d.est && fmtBytes(d.est.kv.perRequestBytes) },
-    { label: "KV disponible", cell: (d) => d.est && fmtBytes(d.est.memory.freeForKvTotalBytes) },
+    { label: t("Modèle", "Model"), cell: (d) => d.input?.model.name },
+    { label: t("Cartes", "Cards"), cell: (d) => d.input && `${d.input.gpuCount} × ${d.input.gpu.name}` },
+    { label: t("Moteur", "Engine"), cell: (d) => d.input?.engine.name },
+    { label: t("Parallélisme", "Parallelism"), cell: (d) => d.est && (d.input?.mode === "dp-ep" ? "DP-attention + EP" : d.input?.gpuCount === 1 ? "—" : `TP ${d.est.tp} × PP ${d.est.pp}`) },
+    { label: t("Poids / KV", "Weights / KV"), cell: (d) => d.input && `${d.input.weightFormat.label} / ${d.input.kvFormat.label}` },
+    { label: t("Contexte", "Context"), cell: (d) => d.input && contextLabel(d.input.contextTokens) },
+    { label: t("Poids du modèle", "Model weights"), cell: (d) => d.est && fmt.bytes(d.est.weights.totalBytes) },
+    { label: t("KV par requête", "KV per request"), cell: (d) => d.est && fmt.bytes(d.est.kv.perRequestBytes) },
+    { label: t("KV disponible", "Available KV"), cell: (d) => d.est && fmt.bytes(d.est.memory.freeForKvTotalBytes) },
     {
       label: "Sessions",
       cell: (d) =>
         d.est && (
-          <strong className={!d.errors && d.est.sessions === best && best > 0 ? "best" : d.errors ? "muted" : ""} title={d.errors ? "Configuration invalide (erreurs bloquantes)" : undefined}>
-            {fmtInt(d.est.sessions)}
-            {d.errors ? " (invalide)" : ""}
+          <strong className={!d.errors && d.est.sessions === best && best > 0 ? "best" : d.errors ? "muted" : ""} title={d.errors ? t("Configuration invalide (erreurs bloquantes)", "Invalid configuration (blocking errors)") : undefined}>
+            {fmt.int(d.est.sessions)}
+            {d.errors ? t(" (invalide)", " (invalid)") : ""}
           </strong>
         ),
     },
-    { label: "Débit 1 session", cell: (d) => d.perf && fmtRate(d.perf.single.tokPerSecPerSession) },
-    { label: "Débit agrégé", cell: (d) => (d.perf?.full ? fmtRate(d.perf.full.tokPerSecTotal) : "—") },
-    { label: "Statut", cell: (d) => d.est && (d.errors ? `⛔ ${d.errors}` : d.warnings ? `⚠️ ${d.warnings}` : "✓") },
+    { label: t("Débit 1 session", "1-session throughput"), cell: (d) => d.perf && fmt.rate(d.perf.single.tokPerSecPerSession) },
+    { label: t("Débit agrégé", "Aggregate throughput"), cell: (d) => (d.perf?.full ? fmt.rate(d.perf.full.tokPerSecTotal) : "—") },
+    { label: t("Statut", "Status"), cell: (d) => d.est && (d.errors ? `⛔ ${d.errors}` : d.warnings ? `⚠️ ${d.warnings}` : "✓") },
   ];
 
   return (
     <div>
       <div className="row-between">
-        <h3>Comparaison de scénarios</h3>
+        <h3>{t("Comparaison de scénarios", "Scenario comparison")}</h3>
         <button type="button" className="btn" onClick={onPin} disabled={pinned.length >= 6}>
-          📌 Épingler la configuration actuelle
+          📌 {t("Épingler la configuration actuelle", "Pin the current configuration")}
         </button>
       </div>
-      {pinned.length === 0 && <p className="hint">Épinglez des configurations (jusqu&apos;à 6) pour les comparer à la configuration en cours. Elles sont gardées dans ce navigateur.</p>}
+      {pinned.length === 0 && (
+        <p className="hint">
+          {t(
+            "Épinglez des configurations (jusqu'à 6) pour les comparer à la configuration en cours. Elles sont gardées dans ce navigateur.",
+            "Pin configurations (up to 6) to compare them with the current one. They are kept in this browser.",
+          )}
+        </p>
+      )}
       <div className="table-wrap">
         <table className="table compact compare">
           <thead>
@@ -83,14 +91,14 @@ export function ComparePanel({
               {data.map((d, i) => (
                 <th key={d.c.key}>
                   {d.c.current ? (
-                    "Actuelle"
+                    t("Actuelle", "Current")
                   ) : (
                     <span className="col-actions">
                       #{i}
                       <button type="button" className="link" onClick={() => onLoad(d.c.scenario)}>
-                        charger
+                        {t("charger", "load")}
                       </button>
-                      <button type="button" className="link" onClick={() => onRemove(i - 1)} aria-label="Retirer">
+                      <button type="button" className="link" onClick={() => onRemove(i - 1)} aria-label={t("Retirer", "Remove")}>
                         ✕
                       </button>
                     </span>
@@ -104,7 +112,7 @@ export function ComparePanel({
               <tr key={r.label}>
                 <th>{r.label}</th>
                 {data.map((d) => (
-                  <td key={d.c.key}>{d.input ? r.cell(d) : <span className="muted">indisponible</span>}</td>
+                  <td key={d.c.key}>{d.input ? r.cell(d) : <span className="muted">{t("indisponible", "unavailable")}</span>}</td>
                 ))}
               </tr>
             ))}

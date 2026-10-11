@@ -2,10 +2,10 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-import { configSchema, type AppConfig } from "./config-schema";
+import { configSchema, type ConfigSource } from "./config-schema";
 
 export type ConfigResult =
-  | { ok: true; config: AppConfig; path: string }
+  | { ok: true; config: ConfigSource; path: string }
   | { ok: false; error: string; path: string };
 
 /** Configuration path: KV_ESTIMATOR_CONFIG, falling back to config/estimator.yaml. */

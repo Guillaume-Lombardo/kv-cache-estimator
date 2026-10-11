@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import type { SupportLevel } from "@/lib/config-schema";
+import { usePrefs } from "./Prefs";
 
 export interface ChipOption {
   id: string;
@@ -28,6 +29,7 @@ export function ChipGroup({
   label: string;
   className?: string;
 }) {
+  const { t } = usePrefs();
   return (
     <div className={`chips ${className}`} role="radiogroup" aria-label={label}>
       {options.map((o) => {
@@ -56,7 +58,7 @@ export function ChipGroup({
           >
             <span className="chip-label">
               {o.star && (
-                <span className="chip-star" aria-label="format natif">
+                <span className="chip-star" aria-label={t("format natif", "native format")}>
                   ★
                 </span>
               )}

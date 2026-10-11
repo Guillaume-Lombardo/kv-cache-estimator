@@ -1,4 +1,8 @@
 import { z } from "zod";
+import type { Localized } from "./i18n";
+
+/** Free text shown in the UI: one string for every language, or one per language. */
+const text = z.union([z.string(), z.strictObject({ fr: z.string(), en: z.string() })]);
 
 /**
  * Support level for a format on a GPU or in an inference engine.
@@ -12,13 +16,13 @@ const supportSchema = z
     z.enum(SUPPORT_LEVELS),
     z.strictObject({
       level: z.enum(SUPPORT_LEVELS),
-      note: z.string().optional(),
+      note: text.optional(),
       /** GPU memory format when the engine converts the file format (e.g. FP8 dequantized to BF16). */
       memoryFormat: z.string().optional(),
     }),
   ])
-  .transform((v): { level: SupportLevel; note?: string; memoryFormat?: string } => (typeof v === "string" ? { level: v } : v));
-export type Support = z.output<typeof supportSchema>;
+  .transform((v): { level: SupportLevel; note?: z.output<typeof text>; memoryFormat?: string } => (typeof v === "string" ? { level: v } : v));
+export type Support = Localized<z.output<typeof supportSchema>>;
 
 /** Engine capability: supported, unsupported, or unverified without a source. */
 const capabilitySchema = z.union([z.boolean(), z.literal("unverified")]);
@@ -31,7 +35,7 @@ const weightFormatSchema = z.strictObject({
   bitsPerParam: z.number().positive(),
   /** Compute throughput used for performance estimates. */
   compute: z.enum(["bf16", "fp8", "fp4"]),
-  description: z.string().optional(),
+  description: text.optional(),
 });
 
 const kvFormatSchema = z.strictObject({
@@ -39,17 +43,17 @@ const kvFormatSchema = z.strictObject({
   label: z.string(),
   /** Effective bytes per stored element, including scales. */
   bytesPerElement: z.number().positive(),
-  description: z.string().optional(),
+  description: text.optional(),
 });
 
 const gpuSchema = z.strictObject({
   id: z.string(),
-  name: z.string(),
+  name: text,
   architecture: z.string(),
   computeCapability: z.string(),
   /** Driver-visible memory, in GiB. */
   memoryGiB: z.number().positive(),
-  memoryLabel: z.string(),
+  memoryLabel: text,
   /** Memory bandwidth, in TB/s. */
   bandwidthTBs: z.number().positive(),
   /** Dense tensor-core throughput (without sparsity), in TFLOPS. */
@@ -59,7 +63,7 @@ const gpuSchema = z.strictObject({
     fp4: z.number().positive().optional(),
   }),
   interconnect: z.strictObject({
-    label: z.string(),
+    label: text,
     nvlink: z.boolean(),
     /** GPU-to-GPU bandwidth per GPU, in GB/s. */
     bandwidthGBs: z.number().positive(),
@@ -72,19 +76,19 @@ const gpuSchema = z.strictObject({
   hostMemoryGiBPerGpu: z.number().nonnegative().default(0),
   /** CPU-to-GPU link per GPU, in GB/s (PCIe or NVLink-C2C). */
   hostLinkGBs: z.number().positive(),
-  hostLinkLabel: z.string(),
+  hostLinkLabel: text,
   weightFormats: z.record(z.string(), supportSchema),
   kvCacheFormats: z.record(z.string(), supportSchema),
-  notes: z.array(z.string()).default([]),
+  notes: z.array(text).default([]),
 });
 
 const engineSchema = z.strictObject({
   id: z.string(),
   name: z.string(),
-  description: z.string().optional(),
+  description: text.optional(),
   confidence: z.enum(["high", "medium", "low"]).default("high"),
   /** Version or revision described by this profile. */
-  version: z.string().optional(),
+  version: text.optional(),
   features: z.strictObject({
     /** Paged KV cache (PagedAttention): blocks allocated on demand. */
     kvPaging: capabilitySchema,
@@ -104,8 +108,8 @@ const engineSchema = z.strictObject({
     kvOffload: capabilitySchema,
   }),
   /** Details or sources for each capability. */
-  featureNotes: z.record(z.string(), z.string()).default({}),
-  sources: z.array(z.strictObject({ label: z.string(), url: z.string() })).default([]),
+  featureNotes: z.record(z.string(), text).default({}),
+  sources: z.array(z.strictObject({ label: text, url: z.string() })).default([]),
   /** Model families advertised by the engine (`family` values). Omitted means unrestricted. */
   modelFamilies: z.array(z.string()).optional(),
   /** Omitted means unsupported by the engine. */
@@ -113,7 +117,7 @@ const engineSchema = z.strictObject({
   kvCacheFormats: z.record(z.string(), supportSchema),
   /** Per-GPU restrictions (omitted means unrestricted). */
   gpus: z.record(z.string(), supportSchema).default({}),
-  notes: z.array(z.string()).default([]),
+  notes: z.array(text).default([]),
   /** Indicative command-line options. */
   flags: z
     .strictObject({
@@ -122,7 +126,7 @@ const engineSchema = z.strictObject({
       tensorParallel: z.string().optional(),
       pipelineParallel: z.string().optional(),
       dpAttention: z.string().optional(),
-      kvOffload: z.string().optional(),
+      kvOffload: text.optional(),
     })
     .default({}),
 });
@@ -158,14 +162,14 @@ const layerGroupSchema = z.discriminatedUnion("kind", [
     ssmElements: z.number().int().positive(),
     /** Short convolution state elements per layer per request. */
     convElements: z.number().int().nonnegative().default(0),
-    label: z.string().optional(),
+    label: text.optional(),
   }),
 ]);
-export type LayerGroup = z.output<typeof layerGroupSchema>;
+export type LayerGroup = Localized<z.output<typeof layerGroupSchema>>;
 
 const formatNoteSchema = z.strictObject({
   level: z.enum(["unsupported", "warning", "info"]),
-  note: z.string(),
+  note: text,
 });
 
 export const modelSchema = z.strictObject({
@@ -205,7 +209,7 @@ export const modelSchema = z.strictObject({
   weightFormatNotes: z.record(z.string(), formatNoteSchema).default({}),
   kvFormatNotes: z.record(z.string(), formatNoteSchema).default({}),
   tags: z.array(z.string()).default([]),
-  notes: z.array(z.string()).default([]),
+  notes: z.array(text).default([]),
   /** Confidence in the supplied architecture parameters. */
   confidence: z.enum(["high", "medium", "low"]).default("high"),
 });
@@ -290,7 +294,11 @@ export const configSchema = z
       ctx.addIssue({ code: "custom", path: ["defaults", "engine"], message: `moteur inconnu : ${d.engine}` });
   });
 
-export type AppConfig = z.output<typeof configSchema>;
+/** Configuration as written in the file, with per-language text. */
+export type ConfigSource = z.output<typeof configSchema>;
+export type ModelSource = ConfigSource["models"][number];
+/** Configuration with every text resolved to one language (see localize in i18n.ts). */
+export type AppConfig = Localized<ConfigSource>;
 export type ModelSpec = AppConfig["models"][number];
 export type ModelInput = z.input<typeof modelSchema>;
 export type GpuSpec = AppConfig["gpus"][number];

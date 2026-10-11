@@ -31,7 +31,7 @@ describe("convertHfConfig", async () => {
   it("estime les paramètres d'un config.json brut (Qwen3-8B ≈ 8,19 B)", () => {
     const json = JSON.parse(readFileSync(path.join(upstream, "Qwen__Qwen3-8B.json"), "utf8"));
     const { model, paramsSource } = convertHfConfig(json.config, { source: "Qwen/Qwen3-8B" });
-    expect(paramsSource).toBe("estimation");
+    expect(paramsSource).toBe("estimate");
     expect(model.paramsB).toBeCloseTo(8.19, 1);
   });
 

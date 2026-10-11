@@ -35,13 +35,13 @@ largeGpuCounts: [16, 32, 64, 72]
 # Embeddings / lm_head stay at 16 bits when quantizing.
 # -----------------------------------------------------------------------------
 weightFormats:
-  - { id: bf16, label: BF16, bitsPerParam: 16, compute: bf16, description: Format d'entraînement standard. }
-  - { id: fp16, label: FP16, bitsPerParam: 16, compute: bf16, description: Seul format 16 bits sur Volta (V100). }
-  - { id: fp8, label: FP8, bitsPerParam: 8, compute: fp8, description: "W8A8 FP8 (E4M3), échelles par bloc ou par canal." }
-  - { id: int8, label: INT8, bitsPerParam: 8, compute: fp8, description: W8A8 INT8 (SmoothQuant) ou W8A16 (GPTQ-Int8). }
-  - { id: int4, label: INT4, bitsPerParam: 4.25, compute: bf16, description: "W4A16 AWQ/GPTQ, groupes de 128 (échelle + zéro)." }
-  - { id: mxfp4, label: MXFP4, bitsPerParam: 4.25, compute: fp4, description: "FP4 E2M1, échelle E8M0 par bloc de 32 (OCP MX)." }
-  - { id: nvfp4, label: NVFP4, bitsPerParam: 4.5, compute: fp4, description: "FP4 E2M1, échelle FP8 par bloc de 16 (NVIDIA)." }
+  - { id: bf16, label: BF16, bitsPerParam: 16, compute: bf16, description: { fr: "Format d'entraînement standard.", en: "Standard training format." } }
+  - { id: fp16, label: FP16, bitsPerParam: 16, compute: bf16, description: { fr: "Seul format 16 bits sur Volta (V100).", en: "Only 16-bit format on Volta (V100)." } }
+  - { id: fp8, label: FP8, bitsPerParam: 8, compute: fp8, description: { fr: "W8A8 FP8 (E4M3), échelles par bloc ou par canal.", en: "W8A8 FP8 (E4M3), per-block or per-channel scales." } }
+  - { id: int8, label: INT8, bitsPerParam: 8, compute: fp8, description: { fr: "W8A8 INT8 (SmoothQuant) ou W8A16 (GPTQ-Int8).", en: "W8A8 INT8 (SmoothQuant) or W8A16 (GPTQ-Int8)." } }
+  - { id: int4, label: INT4, bitsPerParam: 4.25, compute: bf16, description: { fr: "W4A16 AWQ/GPTQ, groupes de 128 (échelle + zéro).", en: "W4A16 AWQ/GPTQ, groups of 128 (scale + zero)." } }
+  - { id: mxfp4, label: MXFP4, bitsPerParam: 4.25, compute: fp4, description: { fr: "FP4 E2M1, échelle E8M0 par bloc de 32 (OCP MX).", en: "FP4 E2M1, E8M0 scale per block of 32 (OCP MX)." } }
+  - { id: nvfp4, label: NVFP4, bitsPerParam: 4.5, compute: fp4, description: { fr: "FP4 E2M1, échelle FP8 par bloc de 16 (NVIDIA).", en: "FP4 E2M1, FP8 scale per block of 16 (NVIDIA)." } }
 
 # -----------------------------------------------------------------------------
 # KV cache formats
@@ -49,8 +49,8 @@ weightFormats:
 kvCacheFormats:
   - { id: bf16, label: BF16, bytesPerElement: 2 }
   - { id: fp16, label: FP16, bytesPerElement: 2 }
-  - { id: fp8, label: FP8, bytesPerElement: 1, description: "E4M3 (ou E5M2), échelles par tenseur. Perte de qualité généralement faible." }
-  - { id: nvfp4, label: NVFP4, bytesPerElement: 0.5625, description: 4 bits + échelle FP8 par bloc de 16. Blackwell uniquement. }
+  - { id: fp8, label: FP8, bytesPerElement: 1, description: { fr: "E4M3 (ou E5M2), échelles par tenseur. Perte de qualité généralement faible.", en: "E4M3 (or E5M2), per-tensor scales. Quality loss is usually small." } }
+  - { id: nvfp4, label: NVFP4, bytesPerElement: 0.5625, description: { fr: "4 bits + échelle FP8 par bloc de 16. Blackwell uniquement.", en: "4 bits + FP8 scale per block of 16. Blackwell only." } }
 
 # -----------------------------------------------------------------------------
 # Inference engines: both the GPU AND the engine must support a format.
@@ -58,7 +58,7 @@ kvCacheFormats:
 engines:
   - id: vllm
     name: vLLM / llm-d
-    description: "vLLM ≥ 0.11 (moteur V1). llm-d orchestre des instances vLLM : mêmes besoins mémoire par instance."
+    description: { fr: "vLLM ≥ 0.11 (moteur V1). llm-d orchestre des instances vLLM : mêmes besoins mémoire par instance.", en: "vLLM ≥ 0.11 (V1 engine). llm-d orchestrates vLLM instances: same memory needs per instance." }
     version: vLLM ≥ 0.11
     features:
       kvPaging: true
@@ -72,37 +72,37 @@ engines:
       dpAttention: true
       kvOffload: true
     featureNotes:
-      kvPoolPreallocated: "Pool de blocs dimensionné au démarrage (--gpu-memory-utilization, après profilage des activations) ; blocs paginés à l'intérieur."
-      slidingWindowFreesBlocks: "Gestionnaire de KV hybride (vLLM ≥ 0.10) : les blocs sortis de la fenêtre sont rendus au pool."
-      kvOffload: "Connecteur d'offload CPU natif ou LMCache."
+      kvPoolPreallocated: { fr: "Pool de blocs dimensionné au démarrage (--gpu-memory-utilization, après profilage des activations) ; blocs paginés à l'intérieur.", en: "Block pool sized at startup (--gpu-memory-utilization, after activation profiling); paged blocks inside it." }
+      slidingWindowFreesBlocks: { fr: "Gestionnaire de KV hybride (vLLM ≥ 0.10) : les blocs sortis de la fenêtre sont rendus au pool.", en: "Hybrid KV manager (vLLM ≥ 0.10): blocks that leave the window are returned to the pool." }
+      kvOffload: { fr: "Connecteur d'offload CPU natif ou LMCache.", en: "Native CPU offload connector or LMCache." }
     sources:
-      - { label: Documentation vLLM, url: "https://docs.vllm.ai/" }
+      - { label: { fr: "Documentation vLLM", en: "vLLM documentation" }, url: "https://docs.vllm.ai/" }
     weightFormats:
       bf16: native
       fp16: native
       fp8: native
-      int8: { level: native, note: "W8A8 via compressed-tensors, ou W8A16 GPTQ." }
-      int4: { level: native, note: AWQ / GPTQ via kernels Marlin (sm80+). }
+      int8: { level: native, note: { fr: "W8A8 via compressed-tensors, ou W8A16 GPTQ.", en: "W8A8 via compressed-tensors, or W8A16 GPTQ." } }
+      int4: { level: native, note: { fr: "AWQ / GPTQ via kernels Marlin (sm80+).", en: "AWQ / GPTQ via Marlin kernels (sm80+)." } }
       mxfp4: native
-      nvfp4: { level: native, note: Checkpoints ModelOpt ou compressed-tensors. }
+      nvfp4: { level: native, note: { fr: "Checkpoints ModelOpt ou compressed-tensors.", en: "ModelOpt or compressed-tensors checkpoints." } }
     kvCacheFormats:
       bf16: native
       fp16: native
-      fp8: { level: native, note: "--kv-cache-dtype fp8 (e4m3) ; échelles calibrées recommandées." }
-      nvfp4: { level: limited, note: KV NVFP4 expérimental ou absent selon la version de vLLM. }
+      fp8: { level: native, note: { fr: "--kv-cache-dtype fp8 (e4m3) ; échelles calibrées recommandées.", en: "--kv-cache-dtype fp8 (e4m3); calibrated scales recommended." } }
+      nvfp4: { level: limited, note: { fr: "KV NVFP4 expérimental ou absent selon la version de vLLM.", en: "NVFP4 KV experimental or missing depending on the vLLM version." } }
     gpus:
-      v100: { level: limited, note: "Volta (sm70) : pas de FlashAttention, de FP8 ni de Marlin. Support non garanti dans vLLM V1 récent." }
+      v100: { level: limited, note: { fr: "Volta (sm70) : pas de FlashAttention, de FP8 ni de Marlin. Support non garanti dans vLLM V1 récent.", en: "Volta (sm70): no FlashAttention, FP8 or Marlin. Support not guaranteed in recent vLLM V1." } }
     notes:
-      - Blocs KV de 16 tokens (arrondi négligeable). Prefix caching non compté.
-      - "États récurrents (Mamba, DeltaNet, KDA) : type piloté par --mamba-ssm-cache-dtype ou par le config.json du modèle."
-      - "llm-d : désagrégation prefill/decode et routage KV-aware entre instances vLLM ; le dimensionnement par instance est identique."
+      - { fr: "Blocs KV de 16 tokens (arrondi négligeable). Prefix caching non compté.", en: "16-token KV blocks (negligible rounding). Prefix caching not counted." }
+      - { fr: "États récurrents (Mamba, DeltaNet, KDA) : type piloté par --mamba-ssm-cache-dtype ou par le config.json du modèle.", en: "Recurrent states (Mamba, DeltaNet, KDA): type set by --mamba-ssm-cache-dtype or by the model's config.json." }
+      - { fr: "llm-d : désagrégation prefill/decode et routage KV-aware entre instances vLLM ; le dimensionnement par instance est identique.", en: "llm-d: prefill/decode disaggregation and KV-aware routing across vLLM instances; per-instance sizing is the same." }
     flags:
       memoryUtilization: --gpu-memory-utilization
       kvCacheDtype: --kv-cache-dtype
       tensorParallel: --tensor-parallel-size
       pipelineParallel: --pipeline-parallel-size
       dpAttention: --data-parallel-size N --enable-expert-parallel
-      kvOffload: "--kv-offloading-size <Gio> (connecteur natif) ou LMCache"
+      kvOffload: { fr: "--kv-offloading-size <Gio> (connecteur natif) ou LMCache", en: "--kv-offloading-size <GiB> (native connector) or LMCache" }
 
   # Profile sourcing rules:
   #   - server capabilities (paging, batching, prefix caching, TP): LLMD documentation;
@@ -111,8 +111,8 @@ engines:
   #     explicit TODO or panic: no. LLMD's own source code is not public.
   - id: zml
     name: ZML / LLMD
-    description: "Serveur LLMD de ZML, sur la bibliothèque github.com/zml/zml (OpenXLA/PJRT). Capacités serveur selon la doc LLMD, formats selon le code de la bibliothèque."
-    version: LLMD (page zml.ai/llmd, oct. 2026) + bibliothèque ZML @3500e88
+    description: { fr: "Serveur LLMD de ZML, sur la bibliothèque github.com/zml/zml (OpenXLA/PJRT). Capacités serveur selon la doc LLMD, formats selon le code de la bibliothèque.", en: "ZML's LLMD server, built on the github.com/zml/zml library (OpenXLA/PJRT). Server capabilities from the LLMD docs, formats from the library code." }
+    version: { fr: "LLMD (page zml.ai/llmd, oct. 2026) + bibliothèque ZML @3500e88", en: "LLMD (zml.ai/llmd page, Oct. 2026) + ZML library @3500e88" }
     confidence: medium
     # LLMD page: "A self-contained inference server for LLaMa, Gemma, Qwen and Mistral models".
     modelFamilies: [Meta (Llama), Google (Gemma), Qwen (Alibaba), Mistral AI]
@@ -128,43 +128,43 @@ engines:
       dpAttention: unverified
       kvOffload: unverified
     featureNotes:
-      kvPaging: "« Paged attention » (page LLMD). Bibliothèque : API paginée, taille de page = dimension k_chunk du pool {page, k_chunk, hkv, hd} (zml/attention/paged_attention.zig)."
-      kvPoolPreallocated: "Non documenté pour LLMD. Bibliothèque : pas de gestionnaire de pages ni de dimensionnement du pool par fraction mémoire ; seul l'allocateur XLA/PJRT réserve 90 % (memory_fraction, zml/platform.zig) ; les exemples préallouent un cache dense au démarrage."
-      prefixCaching: "« Prefix caching » (page LLMD) ; absent de la bibliothèque (implémenté côté serveur)."
-      continuousBatching: "« Continuous batching » (page LLMD). Bibliothèque : batch mixte prefill/decode (batch_size_prefill / batch_size_decode)."
-      slidingWindowAttention: "LLMD sert Gemma (page LLMD), dont les couches locales l'exigent. Masque à fenêtre dans les noyaux CUDA FA2, FA3 et Triton (paged_attention.zig, flashattn.zig) ; refusé sur StableHLO (panic)."
-      slidingWindowFreesBlocks: "Bibliothèque : aucune libération des pages hors fenêtre, gain de calcul seulement (tuiles sautées). La gestion des pages relève de LLMD (code non public)."
-      tensorParallel: "« Tensor parallel sharding » (page LLMD). Bibliothèque : têtes KV shardées sur l'axe model, répliquées si non divisibles."
-      pipelineParallel: Absent de la page LLMD et de la bibliothèque.
-      dpAttention: "Bibliothèque : expert parallel (axe experts) et axe data, sans DP-attention dédiée."
-      kvOffload: Absent de la page LLMD et de la bibliothèque.
+      kvPaging: { fr: "« Paged attention » (page LLMD). Bibliothèque : API paginée, taille de page = dimension k_chunk du pool {page, k_chunk, hkv, hd} (zml/attention/paged_attention.zig).", en: "\"Paged attention\" (LLMD page). Library: paged API, page size = k_chunk dimension of the {page, k_chunk, hkv, hd} pool (zml/attention/paged_attention.zig)." }
+      kvPoolPreallocated: { fr: "Non documenté pour LLMD. Bibliothèque : pas de gestionnaire de pages ni de dimensionnement du pool par fraction mémoire ; seul l'allocateur XLA/PJRT réserve 90 % (memory_fraction, zml/platform.zig) ; les exemples préallouent un cache dense au démarrage.", en: "Not documented for LLMD. Library: no page manager and no pool sizing by memory fraction; only the XLA/PJRT allocator reserves 90% (memory_fraction, zml/platform.zig); the examples preallocate a dense cache at startup." }
+      prefixCaching: { fr: "« Prefix caching » (page LLMD) ; absent de la bibliothèque (implémenté côté serveur).", en: "\"Prefix caching\" (LLMD page); absent from the library (implemented server-side)." }
+      continuousBatching: { fr: "« Continuous batching » (page LLMD). Bibliothèque : batch mixte prefill/decode (batch_size_prefill / batch_size_decode).", en: "\"Continuous batching\" (LLMD page). Library: mixed prefill/decode batch (batch_size_prefill / batch_size_decode)." }
+      slidingWindowAttention: { fr: "LLMD sert Gemma (page LLMD), dont les couches locales l'exigent. Masque à fenêtre dans les noyaux CUDA FA2, FA3 et Triton (paged_attention.zig, flashattn.zig) ; refusé sur StableHLO (panic).", en: "LLMD serves Gemma (LLMD page), whose local layers require it. Window mask in the CUDA FA2, FA3 and Triton kernels (paged_attention.zig, flashattn.zig); rejected on StableHLO (panic)." }
+      slidingWindowFreesBlocks: { fr: "Bibliothèque : aucune libération des pages hors fenêtre, gain de calcul seulement (tuiles sautées). La gestion des pages relève de LLMD (code non public).", en: "Library: pages outside the window are never freed; compute savings only (skipped tiles). Page management is up to LLMD (code not public)." }
+      tensorParallel: { fr: "« Tensor parallel sharding » (page LLMD). Bibliothèque : têtes KV shardées sur l'axe model, répliquées si non divisibles.", en: "\"Tensor parallel sharding\" (LLMD page). Library: KV heads sharded along the model axis, replicated if not divisible." }
+      pipelineParallel: { fr: "Absent de la page LLMD et de la bibliothèque.", en: "Absent from the LLMD page and the library." }
+      dpAttention: { fr: "Bibliothèque : expert parallel (axe experts) et axe data, sans DP-attention dédiée.", en: "Library: expert parallel (experts axis) and data axis, without dedicated DP-attention." }
+      kvOffload: { fr: "Absent de la page LLMD et de la bibliothèque.", en: "Absent from the LLMD page and the library." }
     sources:
-      - { label: Documentation LLMD, url: "https://zml.ai/llmd/" }
-      - { label: "Bibliothèque ZML @3500e88", url: "https://github.com/zml/zml/tree/3500e88cf84e0e98d37b0f6048e6af9d33bc6108" }
+      - { label: { fr: "Documentation LLMD", en: "LLMD documentation" }, url: "https://zml.ai/llmd/" }
+      - { label: { fr: "Bibliothèque ZML @3500e88", en: "ZML library @3500e88" }, url: "https://github.com/zml/zml/tree/3500e88cf84e0e98d37b0f6048e6af9d33bc6108" }
     weightFormats:
-      bf16: { level: native, note: "Modèles BF16 servis tels quels (page LLMD : Qwen/Qwen3-8B, Qwen3.6-27B ; gabarit de bug LLMD : gemma-4-31B-it)." }
-      fp16: { level: native, note: "F16 accepté par les noyaux d'attention CUDA (flashattn.zig)." }
-      fp8: { level: unverified, note: "Bibliothèque : schémas fp8_block128 (DeepSeek), fp8_block32, fp8_per_channel, fp8_per_tensor, gardés quantifiés en mémoire (xla.scaled_dot, zml/nn.zig) ; MoE FP8 via Triton. Chargement par LLMD non vérifié." }
-      int8: { level: unsupported, note: "Non implémenté dans la bibliothèque ZML @3500e88 (TODO « INT4/8 », zml/nn.zig)." }
-      int4: { level: unsupported, note: "AWQ / GPTQ / INT4 non implémentés dans la bibliothèque ZML @3500e88 (TODO « INT4/8 », zml/nn.zig)." }
-      mxfp4: { level: unverified, note: "Bibliothèque : schéma mxfp4 (échelle E8M0 / 32), gardé quantifié ; MoE via CuTe ou Triton MXFP4 sur Blackwell (sm10x), Triton générique ailleurs. Chargement par LLMD non vérifié." }
-      nvfp4: { level: unverified, note: "Bibliothèque : schéma nvfp4 (échelle E4M3 / 16), gardé quantifié ; MoE NVFP4 uniquement via FlashInfer CUTLASS sur sm100/103/120 (erreur ailleurs) ; quantification des activations sur sm100+. Chargement par LLMD non vérifié." }
+      bf16: { level: native, note: { fr: "Modèles BF16 servis tels quels (page LLMD : Qwen/Qwen3-8B, Qwen3.6-27B ; gabarit de bug LLMD : gemma-4-31B-it).", en: "BF16 models served as is (LLMD page: Qwen/Qwen3-8B, Qwen3.6-27B; LLMD bug template: gemma-4-31B-it)." } }
+      fp16: { level: native, note: { fr: "F16 accepté par les noyaux d'attention CUDA (flashattn.zig).", en: "F16 accepted by the CUDA attention kernels (flashattn.zig)." } }
+      fp8: { level: unverified, note: { fr: "Bibliothèque : schémas fp8_block128 (DeepSeek), fp8_block32, fp8_per_channel, fp8_per_tensor, gardés quantifiés en mémoire (xla.scaled_dot, zml/nn.zig) ; MoE FP8 via Triton. Chargement par LLMD non vérifié.", en: "Library: fp8_block128 (DeepSeek), fp8_block32, fp8_per_channel, fp8_per_tensor schemes, kept quantized in memory (xla.scaled_dot, zml/nn.zig); FP8 MoE via Triton. Loading by LLMD not verified." } }
+      int8: { level: unsupported, note: { fr: "Non implémenté dans la bibliothèque ZML @3500e88 (TODO « INT4/8 », zml/nn.zig).", en: "Not implemented in the ZML library @3500e88 (TODO \"INT4/8\", zml/nn.zig)." } }
+      int4: { level: unsupported, note: { fr: "AWQ / GPTQ / INT4 non implémentés dans la bibliothèque ZML @3500e88 (TODO « INT4/8 », zml/nn.zig).", en: "AWQ / GPTQ / INT4 not implemented in the ZML library @3500e88 (TODO \"INT4/8\", zml/nn.zig)." } }
+      mxfp4: { level: unverified, note: { fr: "Bibliothèque : schéma mxfp4 (échelle E8M0 / 32), gardé quantifié ; MoE via CuTe ou Triton MXFP4 sur Blackwell (sm10x), Triton générique ailleurs. Chargement par LLMD non vérifié.", en: "Library: mxfp4 scheme (E8M0 scale / 32), kept quantized; MoE via CuTe or Triton MXFP4 on Blackwell (sm10x), generic Triton elsewhere. Loading by LLMD not verified." } }
+      nvfp4: { level: unverified, note: { fr: "Bibliothèque : schéma nvfp4 (échelle E4M3 / 16), gardé quantifié ; MoE NVFP4 uniquement via FlashInfer CUTLASS sur sm100/103/120 (erreur ailleurs) ; quantification des activations sur sm100+. Chargement par LLMD non vérifié.", en: "Library: nvfp4 scheme (E4M3 scale / 16), kept quantized; NVFP4 MoE only via FlashInfer CUTLASS on sm100/103/120 (error elsewhere); activation quantization on sm100+. Loading by LLMD not verified." } }
     kvCacheFormats:
-      bf16: { level: native, note: "Type du cache = type des embeddings (exemples ZML)." }
+      bf16: { level: native, note: { fr: "Type du cache = type des embeddings (exemples ZML).", en: "Cache type = embedding type (ZML examples)." } }
       fp16: native
-      fp8: { level: unsupported, note: "bibliothèque ZML @3500e88 : FA2/FA3 refusent le FP8 (panic), noyau Triton capable de déquantifier mais désactivé dans le wrapper (use_fp8 = false). Exception : cache MLA FP8/FP4 sur Blackwell (CuTe)." }
-      nvfp4: { level: unsupported, note: "Pas de KV FP4 pour l'attention standard dans la bibliothèque ZML @3500e88 (cache compressé FP4 seulement pour la MLA parcimonieuse sur Blackwell)." }
+      fp8: { level: unsupported, note: { fr: "bibliothèque ZML @3500e88 : FA2/FA3 refusent le FP8 (panic), noyau Triton capable de déquantifier mais désactivé dans le wrapper (use_fp8 = false). Exception : cache MLA FP8/FP4 sur Blackwell (CuTe).", en: "ZML library @3500e88: FA2/FA3 reject FP8 (panic); the Triton kernel can dequantize but is disabled in the wrapper (use_fp8 = false). Exception: FP8/FP4 MLA cache on Blackwell (CuTe)." } }
+      nvfp4: { level: unsupported, note: { fr: "Pas de KV FP4 pour l'attention standard dans la bibliothèque ZML @3500e88 (cache compressé FP4 seulement pour la MLA parcimonieuse sur Blackwell).", en: "No FP4 KV for standard attention in the ZML library @3500e88 (FP4 compressed cache only for sparse MLA on Blackwell)." } }
     gpus:
-      v100: { level: unverified, note: "Aucune vérification sm70 dans la bibliothèque (FA3 réservé à sm90, FA2 sans minimum déclaré)." }
+      v100: { level: unverified, note: { fr: "Aucune vérification sm70 dans la bibliothèque (FA3 réservé à sm90, FA2 sans minimum déclaré).", en: "No sm70 check in the library (FA3 restricted to sm90, FA2 with no declared minimum)." } }
     notes:
-      - "Capacités serveur selon la documentation LLMD ; formats, précision du KV et fenêtres glissantes selon le code de la bibliothèque ZML @3500e88, backend CUDA. Le code de LLMD n'est pas public : une version plus récente peut différer."
-      - "États récurrents (Gated DeltaNet) en FP32 dans la bibliothèque, préalloués."
-      - "MLA : cache latent 512 + RoPE 64 ; cache de l'indexeur DSA non trouvé dans la bibliothèque."
-      - "FlashAttention 3 sur sm90 (H100/H200/GH200), FlashAttention 2 sur les autres GPU CUDA, Triton pour l'attention paginée."
-      - "Page LLMD : CUDA, ROCm, TPU, oneAPI et Metal ; image zmlai/llmd:cuda (1,7 Go) ; chargement direct hf://, s3://, gs:// ; tool calling ; métriques Prometheus (/metrics)."
-      - "Décodage spéculatif DFlash natif pour Gemma 4 (Qwen prévu) : non modélisé ici (réduit la latence, ajoute un modèle brouillon en mémoire)."
-      - "La page ne précise ni les formats de poids, ni la précision du KV, ni la gestion des fenêtres glissantes : ces points viennent du code de la bibliothèque."
-      - "À ne pas confondre avec llm-d (orchestration Kubernetes de vLLM), couvert par le profil vLLM."
+      - { fr: "Capacités serveur selon la documentation LLMD ; formats, précision du KV et fenêtres glissantes selon le code de la bibliothèque ZML @3500e88, backend CUDA. Le code de LLMD n'est pas public : une version plus récente peut différer.", en: "Server capabilities from the LLMD documentation; formats, KV precision and sliding windows from the ZML library code @3500e88, CUDA backend. LLMD's code is not public: a newer version may differ." }
+      - { fr: "États récurrents (Gated DeltaNet) en FP32 dans la bibliothèque, préalloués.", en: "Recurrent states (Gated DeltaNet) in FP32 in the library, preallocated." }
+      - { fr: "MLA : cache latent 512 + RoPE 64 ; cache de l'indexeur DSA non trouvé dans la bibliothèque.", en: "MLA: latent cache 512 + RoPE 64; DSA indexer cache not found in the library." }
+      - { fr: "FlashAttention 3 sur sm90 (H100/H200/GH200), FlashAttention 2 sur les autres GPU CUDA, Triton pour l'attention paginée.", en: "FlashAttention 3 on sm90 (H100/H200/GH200), FlashAttention 2 on other CUDA GPUs, Triton for paged attention." }
+      - { fr: "Page LLMD : CUDA, ROCm, TPU, oneAPI et Metal ; image zmlai/llmd:cuda (1,7 Go) ; chargement direct hf://, s3://, gs:// ; tool calling ; métriques Prometheus (/metrics).", en: "LLMD page: CUDA, ROCm, TPU, oneAPI and Metal; zmlai/llmd:cuda image (1.7 GB); direct loading from hf://, s3://, gs://; tool calling; Prometheus metrics (/metrics)." }
+      - { fr: "Décodage spéculatif DFlash natif pour Gemma 4 (Qwen prévu) : non modélisé ici (réduit la latence, ajoute un modèle brouillon en mémoire).", en: "Native DFlash speculative decoding for Gemma 4 (Qwen planned): not modeled here (reduces latency, adds a draft model in memory)." }
+      - { fr: "La page ne précise ni les formats de poids, ni la précision du KV, ni la gestion des fenêtres glissantes : ces points viennent du code de la bibliothèque.", en: "The page specifies neither weight formats, KV precision nor sliding-window handling: these come from the library code." }
+      - { fr: "À ne pas confondre avec llm-d (orchestration Kubernetes de vLLM), couvert par le profil vLLM.", en: "Not to be confused with llm-d (Kubernetes orchestration of vLLM), covered by the vLLM profile." }
 
 # -----------------------------------------------------------------------------
 # GPUs: approximate dense TFLOPS (without sparsity).
@@ -175,40 +175,40 @@ gpus:
     architecture: Volta
     computeCapability: "7.0"
     memoryGiB: 31.7
-    memoryLabel: 32 Go HBM2
+    memoryLabel: { fr: "32 Go HBM2", en: "32 GB HBM2" }
     bandwidthTBs: 0.9
     tflops: { bf16: 125 } # FP16 tensor core
-    interconnect: { label: NVLink 2 (300 Go/s bidir.), nvlink: true, bandwidthGBs: 150 }
+    interconnect: { label: { fr: "NVLink 2 (300 Go/s bidir.)", en: "NVLink 2 (300 GB/s bidir.)" }, nvlink: true, bandwidthGBs: 150 }
     maxGpusPerNode: 8
     nvlinkDomain: 8
     hostLinkGBs: 12
     hostLinkLabel: PCIe Gen3 x16
     weightFormats:
-      bf16: { level: unsupported, note: Pas de BF16 matériel sur Volta. Utilisez FP16. }
+      bf16: { level: unsupported, note: { fr: "Pas de BF16 matériel sur Volta. Utilisez FP16.", en: "No hardware BF16 on Volta. Use FP16." } }
       fp16: native
-      fp8: { level: unsupported, note: Pas de FP8 avant Ada/Hopper (sm89+). }
-      int8: { level: limited, note: "Pas de tensor cores INT8 sur Volta : W8A16 via kernels génériques, lent." }
-      int4: { level: limited, note: "Kernels Marlin indisponibles (sm80+). GPTQ/AWQ via anciens kernels, support moteur réduit." }
-      mxfp4: { level: unsupported, note: FP4 non supporté sur Volta. }
-      nvfp4: { level: unsupported, note: FP4 non supporté sur Volta. }
+      fp8: { level: unsupported, note: { fr: "Pas de FP8 avant Ada/Hopper (sm89+).", en: "No FP8 before Ada/Hopper (sm89+)." } }
+      int8: { level: limited, note: { fr: "Pas de tensor cores INT8 sur Volta : W8A16 via kernels génériques, lent.", en: "No INT8 tensor cores on Volta: W8A16 via generic kernels, slow." } }
+      int4: { level: limited, note: { fr: "Kernels Marlin indisponibles (sm80+). GPTQ/AWQ via anciens kernels, support moteur réduit.", en: "Marlin kernels unavailable (sm80+). GPTQ/AWQ via older kernels, limited engine support." } }
+      mxfp4: { level: unsupported, note: { fr: "FP4 non supporté sur Volta.", en: "FP4 not supported on Volta." } }
+      nvfp4: { level: unsupported, note: { fr: "FP4 non supporté sur Volta.", en: "FP4 not supported on Volta." } }
     kvCacheFormats:
-      bf16: { level: unsupported, note: Pas de BF16 sur Volta. }
+      bf16: { level: unsupported, note: { fr: "Pas de BF16 sur Volta.", en: "No BF16 on Volta." } }
       fp16: native
-      fp8: { level: unsupported, note: Pas de FP8 matériel ; non géré par les backends d'attention récents. }
-      nvfp4: { level: unsupported, note: Blackwell uniquement. }
+      fp8: { level: unsupported, note: { fr: "Pas de FP8 matériel ; non géré par les backends d'attention récents.", en: "No hardware FP8; not handled by recent attention backends." } }
+      nvfp4: { level: unsupported, note: { fr: "Blackwell uniquement.", en: "Blackwell only." } }
     notes:
-      - FlashAttention 2/3 non supporté (sm70).
-      - "Topologie DGX-1 en hybrid cube mesh : NVLink pas tout-à-tout à 8 GPUs."
+      - { fr: "FlashAttention 2/3 non supporté (sm70).", en: "FlashAttention 2/3 not supported (sm70)." }
+      - { fr: "Topologie DGX-1 en hybrid cube mesh : NVLink pas tout-à-tout à 8 GPUs.", en: "DGX-1 hybrid cube-mesh topology: NVLink is not all-to-all across 8 GPUs." }
 
   - id: l40s
     name: L40S
     architecture: Ada Lovelace
     computeCapability: "8.9"
     memoryGiB: 45.0
-    memoryLabel: 48 Go GDDR6
+    memoryLabel: { fr: "48 Go GDDR6", en: "48 GB GDDR6" }
     bandwidthTBs: 0.864
     tflops: { bf16: 181, fp8: 362 }
-    interconnect: { label: "PCIe Gen4 x16 (~32 Go/s par sens)", nvlink: false, bandwidthGBs: 32 }
+    interconnect: { label: { fr: "PCIe Gen4 x16 (~32 Go/s par sens)", en: "PCIe Gen4 x16 (~32 GB/s per direction)" }, nvlink: false, bandwidthGBs: 32 }
     maxGpusPerNode: 8
     nvlinkDomain: 1
     hostLinkGBs: 25
@@ -219,26 +219,26 @@ gpus:
       fp8: native
       int8: native
       int4: native
-      mxfp4: { level: limited, note: "Pas de FP4 matériel : W4A16 (Marlin), déquantification en BF16." }
-      nvfp4: { level: limited, note: "Pas de FP4 matériel : W4A16 (Marlin), déquantification en BF16." }
+      mxfp4: { level: limited, note: { fr: "Pas de FP4 matériel : W4A16 (Marlin), déquantification en BF16.", en: "No hardware FP4: W4A16 (Marlin), dequantized to BF16." } }
+      nvfp4: { level: limited, note: { fr: "Pas de FP4 matériel : W4A16 (Marlin), déquantification en BF16.", en: "No hardware FP4: W4A16 (Marlin), dequantized to BF16." } }
     kvCacheFormats:
       bf16: native
       fp16: native
       fp8: native
-      nvfp4: { level: unsupported, note: Blackwell uniquement. }
+      nvfp4: { level: unsupported, note: { fr: "Blackwell uniquement.", en: "Blackwell only." } }
     notes:
-      - Pas de NVLink ni de NVSwitch. Le multi-GPU passe par PCIe.
-      - "Bande passante mémoire GDDR6 ~4× plus faible qu'un H100 : décodage plus lent."
+      - { fr: "Pas de NVLink ni de NVSwitch. Le multi-GPU passe par PCIe.", en: "No NVLink or NVSwitch. Multi-GPU goes over PCIe." }
+      - { fr: "Bande passante mémoire GDDR6 ~4× plus faible qu'un H100 : décodage plus lent.", en: "GDDR6 memory bandwidth ~4× lower than an H100: slower decoding." }
 
   - id: h100
     name: H100 SXM
     architecture: Hopper
     computeCapability: "9.0"
     memoryGiB: 79.6
-    memoryLabel: 80 Go HBM3
+    memoryLabel: { fr: "80 Go HBM3", en: "80 GB HBM3" }
     bandwidthTBs: 3.35
     tflops: { bf16: 989, fp8: 1979 }
-    interconnect: { label: NVLink 4 + NVSwitch (900 Go/s bidir.), nvlink: true, bandwidthGBs: 450 }
+    interconnect: { label: { fr: "NVLink 4 + NVSwitch (900 Go/s bidir.)", en: "NVLink 4 + NVSwitch (900 GB/s bidir.)" }, nvlink: true, bandwidthGBs: 450 }
     maxGpusPerNode: 8
     nvlinkDomain: 8
     hostLinkGBs: 55
@@ -249,13 +249,13 @@ gpus:
       fp8: native
       int8: native
       int4: native
-      mxfp4: { level: limited, note: "Pas de FP4 matériel : W4A16 (Marlin / Triton), déquantification en BF16." }
-      nvfp4: { level: limited, note: "Pas de FP4 matériel : W4A16 (Marlin), déquantification en BF16." }
+      mxfp4: { level: limited, note: { fr: "Pas de FP4 matériel : W4A16 (Marlin / Triton), déquantification en BF16.", en: "No hardware FP4: W4A16 (Marlin / Triton), dequantized to BF16." } }
+      nvfp4: { level: limited, note: { fr: "Pas de FP4 matériel : W4A16 (Marlin), déquantification en BF16.", en: "No hardware FP4: W4A16 (Marlin), dequantized to BF16." } }
     kvCacheFormats: &hopperKv
       bf16: native
       fp16: native
       fp8: native
-      nvfp4: { level: unsupported, note: Blackwell uniquement. }
+      nvfp4: { level: unsupported, note: { fr: "Blackwell uniquement.", en: "Blackwell only." } }
     notes: []
 
   - id: h200
@@ -263,10 +263,10 @@ gpus:
     architecture: Hopper
     computeCapability: "9.0"
     memoryGiB: 140.4
-    memoryLabel: 141 Go HBM3e
+    memoryLabel: { fr: "141 Go HBM3e", en: "141 GB HBM3e" }
     bandwidthTBs: 4.8
     tflops: { bf16: 989, fp8: 1979 }
-    interconnect: { label: NVLink 4 + NVSwitch (900 Go/s bidir.), nvlink: true, bandwidthGBs: 450 }
+    interconnect: { label: { fr: "NVLink 4 + NVSwitch (900 Go/s bidir.)", en: "NVLink 4 + NVSwitch (900 GB/s bidir.)" }, nvlink: true, bandwidthGBs: 450 }
     maxGpusPerNode: 8
     nvlinkDomain: 8
     hostLinkGBs: 55
@@ -276,54 +276,54 @@ gpus:
     notes: []
 
   - id: gh200
-    name: GH200 (96 Go)
+    name: { fr: "GH200 (96 Go)", en: "GH200 (96 GB)" }
     architecture: Hopper + Grace
     computeCapability: "9.0"
     memoryGiB: 95.6
-    memoryLabel: 96 Go HBM3 (+480 Go LPDDR5X)
+    memoryLabel: { fr: "96 Go HBM3 (+480 Go LPDDR5X)", en: "96 GB HBM3 (+480 GB LPDDR5X)" }
     bandwidthTBs: 4.0
     tflops: { bf16: 989, fp8: 1979 }
-    interconnect: { label: "GPU↔GPU selon plateforme (réseau, NVL2 ou NVL32)", nvlink: false, bandwidthGBs: 50 }
+    interconnect: { label: { fr: "GPU↔GPU selon plateforme (réseau, NVL2 ou NVL32)", en: "GPU↔GPU depends on platform (network, NVL2 or NVL32)" }, nvlink: false, bandwidthGBs: 50 }
     maxGpusPerNode: 4
     nvlinkDomain: 1
     hostMemoryGiBPerGpu: 447
     hostLinkGBs: 450
-    hostLinkLabel: NVLink-C2C (900 Go/s bidir.)
+    hostLinkLabel: { fr: "NVLink-C2C (900 Go/s bidir.)", en: "NVLink-C2C (900 GB/s bidir.)" }
     weightFormats: *hopperWeights
     kvCacheFormats: *hopperKv
     notes:
-      - "NVLink-C2C relie le CPU Grace au GPU, pas les GPUs entre eux. Plateformes NVL2/NVL32 : ajustez interconnect dans le YAML."
-      - "480 Go de LPDDR5X côté Grace accessibles de façon cohérente : utilisables pour décharger du KV."
+      - { fr: "NVLink-C2C relie le CPU Grace au GPU, pas les GPUs entre eux. Plateformes NVL2/NVL32 : ajustez interconnect dans le YAML.", en: "NVLink-C2C links the Grace CPU to the GPU, not GPUs to each other. NVL2/NVL32 platforms: adjust interconnect in the YAML." }
+      - { fr: "480 Go de LPDDR5X côté Grace accessibles de façon cohérente : utilisables pour décharger du KV.", en: "480 GB of LPDDR5X on the Grace side, coherently accessible: usable for KV offloading." }
 
   - id: gh200-144
-    name: GH200 (144 Go)
+    name: { fr: "GH200 (144 Go)", en: "GH200 (144 GB)" }
     architecture: Hopper + Grace
     computeCapability: "9.0"
     memoryGiB: 139.5
-    memoryLabel: 144 Go HBM3e (+480 Go LPDDR5X)
+    memoryLabel: { fr: "144 Go HBM3e (+480 Go LPDDR5X)", en: "144 GB HBM3e (+480 GB LPDDR5X)" }
     bandwidthTBs: 4.9
     tflops: { bf16: 989, fp8: 1979 }
-    interconnect: { label: "GPU↔GPU selon plateforme (réseau, NVL2 ou NVL32)", nvlink: false, bandwidthGBs: 50 }
+    interconnect: { label: { fr: "GPU↔GPU selon plateforme (réseau, NVL2 ou NVL32)", en: "GPU↔GPU depends on platform (network, NVL2 or NVL32)" }, nvlink: false, bandwidthGBs: 50 }
     maxGpusPerNode: 4
     nvlinkDomain: 1
     hostMemoryGiBPerGpu: 447
     hostLinkGBs: 450
-    hostLinkLabel: NVLink-C2C (900 Go/s bidir.)
+    hostLinkLabel: { fr: "NVLink-C2C (900 Go/s bidir.)", en: "NVLink-C2C (900 GB/s bidir.)" }
     weightFormats: *hopperWeights
     kvCacheFormats: *hopperKv
     notes:
-      - "NVLink-C2C relie le CPU Grace au GPU, pas les GPUs entre eux."
-      - "Mémoire visible approximative : vérifiez avec nvidia-smi."
+      - { fr: "NVLink-C2C relie le CPU Grace au GPU, pas les GPUs entre eux.", en: "NVLink-C2C links the Grace CPU to the GPU, not GPUs to each other." }
+      - { fr: "Mémoire visible approximative : vérifiez avec nvidia-smi.", en: "Visible memory is approximate: check with nvidia-smi." }
 
   - id: b200
     name: B200
     architecture: Blackwell
     computeCapability: "10.0"
     memoryGiB: 179.1
-    memoryLabel: 192 Go HBM3e (180 utilisables)
+    memoryLabel: { fr: "192 Go HBM3e (180 utilisables)", en: "192 GB HBM3e (180 usable)" }
     bandwidthTBs: 8.0
     tflops: { bf16: 2250, fp8: 4500, fp4: 9000 }
-    interconnect: { label: "NVLink 5 + NVSwitch (1,8 To/s bidir.)", nvlink: true, bandwidthGBs: 900 }
+    interconnect: { label: { fr: "NVLink 5 + NVSwitch (1,8 To/s bidir.)", en: "NVLink 5 + NVSwitch (1.8 TB/s bidir.)" }, nvlink: true, bandwidthGBs: 900 }
     maxGpusPerNode: 8
     nvlinkDomain: 8
     hostLinkGBs: 55
@@ -348,30 +348,30 @@ gpus:
     architecture: Blackwell + Grace
     computeCapability: "10.0"
     memoryGiB: 185.0
-    memoryLabel: 186 Go HBM3e
+    memoryLabel: { fr: "186 Go HBM3e", en: "186 GB HBM3e" }
     bandwidthTBs: 8.0
     tflops: { bf16: 2500, fp8: 5000, fp4: 10000 }
-    interconnect: { label: "NVLink 5, domaine NVL72 (1,8 To/s bidir.)", nvlink: true, bandwidthGBs: 900 }
+    interconnect: { label: { fr: "NVLink 5, domaine NVL72 (1,8 To/s bidir.)", en: "NVLink 5, NVL72 domain (1.8 TB/s bidir.)" }, nvlink: true, bandwidthGBs: 900 }
     maxGpusPerNode: 4
     nvlinkDomain: 72
     hostMemoryGiBPerGpu: 223
     hostLinkGBs: 225
-    hostLinkLabel: NVLink-C2C (partagé par 2 GPUs)
+    hostLinkLabel: { fr: "NVLink-C2C (partagé par 2 GPUs)", en: "NVLink-C2C (shared by 2 GPUs)" }
     weightFormats: *blackwellWeights
     kvCacheFormats: *blackwellKv
     notes:
-      - "Un superchip GB200 = 1 Grace + 2 GPUs ; le compteur désigne les GPUs."
-      - "4 GPUs par compute tray, domaine NVLink de 72 GPUs (NVL72) : le TP au-delà d'un tray reste en NVLink."
+      - { fr: "Un superchip GB200 = 1 Grace + 2 GPUs ; le compteur désigne les GPUs.", en: "One GB200 superchip = 1 Grace + 2 GPUs; the count refers to GPUs." }
+      - { fr: "4 GPUs par compute tray, domaine NVLink de 72 GPUs (NVL72) : le TP au-delà d'un tray reste en NVLink.", en: "4 GPUs per compute tray, 72-GPU NVLink domain (NVL72): TP beyond one tray stays on NVLink." }
 
   - id: b300
     name: B300
     architecture: Blackwell Ultra
     computeCapability: "10.3"
     memoryGiB: 268.2
-    memoryLabel: 288 Go HBM3e
+    memoryLabel: { fr: "288 Go HBM3e", en: "288 GB HBM3e" }
     bandwidthTBs: 8.0
     tflops: { bf16: 2250, fp8: 4500, fp4: 13500 }
-    interconnect: { label: "NVLink 5 + NVSwitch (1,8 To/s bidir.)", nvlink: true, bandwidthGBs: 900 }
+    interconnect: { label: { fr: "NVLink 5 + NVSwitch (1,8 To/s bidir.)", en: "NVLink 5 + NVSwitch (1.8 TB/s bidir.)" }, nvlink: true, bandwidthGBs: 900 }
     maxGpusPerNode: 8
     nvlinkDomain: 8
     hostLinkGBs: 55
@@ -380,33 +380,33 @@ gpus:
       bf16: native
       fp16: native
       fp8: native
-      int8: { level: limited, note: "Blackwell Ultra : débit tensor core INT8 fortement réduit. Préférez FP8 ou FP4." }
+      int8: { level: limited, note: { fr: "Blackwell Ultra : débit tensor core INT8 fortement réduit. Préférez FP8 ou FP4.", en: "Blackwell Ultra: INT8 tensor-core throughput greatly reduced. Prefer FP8 or FP4." } }
       int4: native
       mxfp4: native
       nvfp4: native
     kvCacheFormats: *blackwellKv
     notes:
-      - "Mémoire visible approximative (288 Go décimaux ≈ 268 Gio ; certaines fiches indiquent 270-279 Go utilisables). Vérifiez avec nvidia-smi."
+      - { fr: "Mémoire visible approximative (288 Go décimaux ≈ 268 Gio ; certaines fiches indiquent 270-279 Go utilisables). Vérifiez avec nvidia-smi.", en: "Visible memory is approximate (288 decimal GB ≈ 268 GiB; some spec sheets list 270-279 GB usable). Check with nvidia-smi." }
 
   - id: gb300
     name: GB300
     architecture: Blackwell Ultra + Grace
     computeCapability: "10.3"
     memoryGiB: 268.2
-    memoryLabel: 288 Go HBM3e
+    memoryLabel: { fr: "288 Go HBM3e", en: "288 GB HBM3e" }
     bandwidthTBs: 8.0
     tflops: { bf16: 2500, fp8: 5000, fp4: 15000 }
-    interconnect: { label: "NVLink 5, domaine NVL72 (1,8 To/s bidir.)", nvlink: true, bandwidthGBs: 900 }
+    interconnect: { label: { fr: "NVLink 5, domaine NVL72 (1,8 To/s bidir.)", en: "NVLink 5, NVL72 domain (1.8 TB/s bidir.)" }, nvlink: true, bandwidthGBs: 900 }
     maxGpusPerNode: 4
     nvlinkDomain: 72
     hostMemoryGiBPerGpu: 223
     hostLinkGBs: 225
-    hostLinkLabel: NVLink-C2C (partagé par 2 GPUs)
+    hostLinkLabel: { fr: "NVLink-C2C (partagé par 2 GPUs)", en: "NVLink-C2C (shared by 2 GPUs)" }
     weightFormats: *blackwellUltraWeights
     kvCacheFormats: *blackwellKv
     notes:
-      - "Un superchip GB300 = 1 Grace + 2 GPUs ; le compteur désigne les GPUs. Domaine NVLink de 72 GPUs (NVL72)."
-      - "Mémoire visible approximative : vérifiez avec nvidia-smi."
+      - { fr: "Un superchip GB300 = 1 Grace + 2 GPUs ; le compteur désigne les GPUs. Domaine NVLink de 72 GPUs (NVL72).", en: "One GB300 superchip = 1 Grace + 2 GPUs; the count refers to GPUs. 72-GPU NVLink domain (NVL72)." }
+      - { fr: "Mémoire visible approximative : vérifiez avec nvidia-smi.", en: "Visible memory is approximate: check with nvidia-smi." }
 
 # -----------------------------------------------------------------------------
 # Models
@@ -440,7 +440,8 @@ models:
     nativeWeightFormat: fp8
     officialWeightFormats: [bf16, fp8, nvfp4]
     tags: [moe, vision]
-    notes: [Architecture de type DeepSeek-V3 (MLA + MoE). Backend MLA compressé requis.]
+    notes:
+      - { fr: "Architecture de type DeepSeek-V3 (MLA + MoE). Backend MLA compressé requis.", en: "DeepSeek-V3-style architecture (MLA + MoE). Compressed MLA backend required." }
 
   - id: mistral-medium-3.5
     name: Mistral Medium 3.5 (128B)
@@ -488,7 +489,8 @@ models:
     maxContext: 131072
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16]
-    notes: [Licence Mistral Research (usage commercial soumis à accord).]
+    notes:
+      - { fr: "Licence Mistral Research (usage commercial soumis à accord).", en: "Mistral Research License (commercial use requires an agreement)." }
 
   - id: mistral-small-3.2
     name: Mistral Small 3.2 (24B)
@@ -506,7 +508,8 @@ models:
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16]
     tags: [vision]
-    notes: [Même architecture que Magistral Small et Devstral Small 1.x.]
+    notes:
+      - { fr: "Même architecture que Magistral Small et Devstral Small 1.x.", en: "Same architecture as Magistral Small and Devstral Small 1.x." }
 
   - id: devstral-small-2
     name: Devstral Small 2 (24B)
@@ -605,7 +608,8 @@ models:
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16]
     tags: [code]
-    notes: [Licence Mistral Non-Production.]
+    notes:
+      - { fr: "Licence Mistral Non-Production.", en: "Mistral Non-Production License." }
 
   - id: mixtral-8x22b
     name: Mixtral 8x22B
@@ -678,8 +682,8 @@ models:
     tags: [moe]
     confidence: medium
     notes:
-      - "MLA + DeepSeek Sparse Attention. Paramètres actifs estimés (~40 B)."
-      - Couche MTP incluse dans les paramètres, pas dans le KV.
+      - { fr: "MLA + DeepSeek Sparse Attention. Paramètres actifs estimés (~40 B).", en: "MLA + DeepSeek Sparse Attention. Estimated active parameters (~40 B)." }
+      - { fr: "Couche MTP incluse dans les paramètres, pas dans le KV.", en: "MTP layer included in the parameters, not in the KV." }
 
   - id: glm-5.3-flash
     name: GLM-5.3-Flash (321B)
@@ -693,7 +697,7 @@ models:
     vocabSize: 154880
     attentionHeads: 64
     layers:
-      - { kind: linear, count: 34, ssmElements: 1048576, convElements: 73728, label: KDA (état constant) }
+      - { kind: linear, count: 34, ssmElements: 1048576, convElements: 73728, label: { fr: "KDA (état constant)", en: "KDA (constant state)" } }
       # DSA indexer with 4x key pooling (index_kpool): about 132/4 bytes per token.
       - { kind: mla, count: 11, kvLoraRank: 512, ropeHeadDim: 0, extraBytesPerToken: 33 }
     maxContext: 1048576
@@ -703,8 +707,8 @@ models:
     tags: [moe, hybrid, vision]
     confidence: medium
     notes:
-      - "Hybride KDA / MLA-DSA (NoPE). Paramètres actifs estimés (~17 B)."
-      - "États KDA en FP32 par prudence ; index DSA supposé compressé ×4 (index_kpool)."
+      - { fr: "Hybride KDA / MLA-DSA (NoPE). Paramètres actifs estimés (~17 B).", en: "Hybrid KDA / MLA-DSA (NoPE). Estimated active parameters (~17 B)." }
+      - { fr: "États KDA en FP32 par prudence ; index DSA supposé compressé ×4 (index_kpool).", en: "KDA states in FP32 to be safe; DSA index assumed compressed ×4 (index_kpool)." }
 
   - id: glm-5
     name: GLM-5 (744B-A40B)
@@ -723,7 +727,8 @@ models:
     officialWeightFormats: [bf16, fp8]
     tags: [moe]
     confidence: medium
-    notes: ["MLA + DeepSeek Sparse Attention (DSA), architecture proche de GLM-5.3. Indexeur compté sur toutes les couches (borne haute)."]
+    notes:
+      - { fr: "MLA + DeepSeek Sparse Attention (DSA), architecture proche de GLM-5.3. Indexeur compté sur toutes les couches (borne haute).", en: "MLA + DeepSeek Sparse Attention (DSA), architecture close to GLM-5.3. Indexer counted on all layers (upper bound)." }
 
   - id: glm-4.7
     name: GLM-4.7 (358B-A32B)
@@ -743,7 +748,8 @@ models:
     officialWeightFormats: [bf16, fp8]
     checkpoints: { fp8: zai-org/GLM-4.7-FP8 }
     tags: [moe]
-    notes: [Couche MTP (décodage spéculatif) incluse dans les paramètres, pas dans le KV.]
+    notes:
+      - { fr: "Couche MTP (décodage spéculatif) incluse dans les paramètres, pas dans le KV.", en: "MTP layer (speculative decoding) included in the parameters, not in the KV." }
 
   - id: glm-4.6
     name: GLM-4.6 (358B-A32B)
@@ -847,7 +853,7 @@ models:
     extraUnquantizedParamsB: 54.8
     attentionHeads: 96
     layers:
-      - { kind: linear, count: 69, ssmElements: 1572864, convElements: 110592, label: KDA (état constant) }
+      - { kind: linear, count: 69, ssmElements: 1572864, convElements: 110592, label: { fr: "KDA (état constant)", en: "KDA (constant state)" } }
       - { kind: mla, count: 24, kvLoraRank: 512, ropeHeadDim: 0 }
     maxContext: 1048576
     nativeWeightFormat: mxfp4
@@ -856,8 +862,8 @@ models:
     tags: [moe, hybrid, vision]
     confidence: medium
     notes:
-      - "Hybride KDA / MLA (NoPE), 896 experts. Experts en MXFP4 natif, ~57 B paramètres en BF16."
-      - "Nombre de paramètres nominal ; paramètres actifs estimés (~100 B), à confirmer."
+      - { fr: "Hybride KDA / MLA (NoPE), 896 experts. Experts en MXFP4 natif, ~57 B paramètres en BF16.", en: "Hybrid KDA / MLA (NoPE), 896 experts. Experts in native MXFP4, ~57 B parameters in BF16." }
+      - { fr: "Nombre de paramètres nominal ; paramètres actifs estimés (~100 B), à confirmer.", en: "Nominal parameter count; estimated active parameters (~100 B), to be confirmed." }
 
   - id: kimi-k2.5
     name: Kimi K2.5 (1T-A32B)
@@ -878,7 +884,8 @@ models:
     nativeBitsPerParam: 4.5
     officialWeightFormats: [int4]
     tags: [moe, vision]
-    notes: ["Experts en INT4 natif (QAT, groupes de 32 = 4,5 bits), attention et couches partagées en BF16 (~12 B)."]
+    notes:
+      - { fr: "Experts en INT4 natif (QAT, groupes de 32 = 4,5 bits), attention et couches partagées en BF16 (~12 B).", en: "Experts in native INT4 (QAT, groups of 32 = 4.5 bits), attention and shared layers in BF16 (~12 B)." }
 
   - id: kimi-k2-thinking
     name: Kimi K2 Thinking (1T-A32B)
@@ -898,7 +905,8 @@ models:
     nativeBitsPerParam: 4.5
     officialWeightFormats: [int4]
     tags: [moe, reasoning]
-    notes: ["Experts en INT4 natif (QAT, groupes de 32 = 4,5 bits), attention en BF16."]
+    notes:
+      - { fr: "Experts en INT4 natif (QAT, groupes de 32 = 4,5 bits), attention en BF16.", en: "Experts in native INT4 (QAT, groups of 32 = 4.5 bits), attention in BF16." }
 
   - id: kimi-k2-instruct
     name: Kimi K2 Instruct 0905 (1T-A32B)
@@ -917,7 +925,8 @@ models:
     nativeWeightFormat: fp8
     officialWeightFormats: [fp8]
     tags: [moe]
-    notes: [Révision vérifiée sur Kimi-K2-Instruct (0711, 128k) ; la version 0905 porte le contexte à 256k.]
+    notes:
+      - { fr: "Révision vérifiée sur Kimi-K2-Instruct (0711, 128k) ; la version 0905 porte le contexte à 256k.", en: "Revision checked against Kimi-K2-Instruct (0711, 128k); version 0905 raises the context to 256k." }
 
   - id: kimi-linear
     name: Kimi Linear (48B-A3B)
@@ -929,7 +938,7 @@ models:
     vocabSize: 163840
     attentionHeads: 32
     layers:
-      - { kind: linear, count: 20, ssmElements: 524288, convElements: 36864, label: KDA (état constant) }
+      - { kind: linear, count: 20, ssmElements: 524288, convElements: 36864, label: { fr: "KDA (état constant)", en: "KDA (constant state)" } }
       - { kind: mla, count: 7, kvLoraRank: 512, ropeHeadDim: 0 }
     maxContext: 1048576
     nativeWeightFormat: bf16
@@ -937,7 +946,8 @@ models:
     ssmStateBytes: 4
     tags: [moe, hybrid]
     confidence: low
-    notes: [Hybride Kimi Delta Attention / MLA (NoPE), ratio 3:1.]
+    notes:
+      - { fr: "Hybride Kimi Delta Attention / MLA (NoPE), ratio 3:1.", en: "Hybrid Kimi Delta Attention / MLA (NoPE), 3:1 ratio." }
 
   # ================================================================ Xiaomi (MiMo)
   - id: mimo-v2.6-pro
@@ -960,7 +970,8 @@ models:
     officialWeightFormats: [fp8]
     tags: [moe, swa, vision]
     confidence: medium
-    notes: ["Attention hybride fenêtre glissante (128 tokens) / globale, 384 experts. Paramètres actifs estimés (~42 B)."]
+    notes:
+      - { fr: "Attention hybride fenêtre glissante (128 tokens) / globale, 384 experts. Paramètres actifs estimés (~42 B).", en: "Hybrid sliding-window (128 tokens) / global attention, 384 experts. Estimated active parameters (~42 B)." }
 
   - id: mimo-v2.6-flash
     name: MiMo-V2.6-Flash (311B-A15B)
@@ -981,7 +992,8 @@ models:
     nativeWeightFormat: fp8
     officialWeightFormats: [fp8]
     tags: [moe, swa, vision]
-    notes: [Attention hybride fenêtre glissante (128 tokens) / globale + 3 couches MTP.]
+    notes:
+      - { fr: "Attention hybride fenêtre glissante (128 tokens) / globale + 3 couches MTP.", en: "Hybrid sliding-window (128 tokens) / global attention + 3 MTP layers." }
 
   - id: mimo-v2-flash
     name: MiMo-V2-Flash (309B-A15B)
@@ -1001,7 +1013,8 @@ models:
     officialWeightFormats: [fp8]
     tags: [moe, swa]
     confidence: medium
-    notes: [Architecture supposée identique à MiMo-V2.6-Flash.]
+    notes:
+      - { fr: "Architecture supposée identique à MiMo-V2.6-Flash.", en: "Architecture assumed identical to MiMo-V2.6-Flash." }
 
   - id: mimo-7b
     name: MiMo-7B-RL
@@ -1031,7 +1044,7 @@ models:
     extraUnquantizedParamsB: 0.6
     attentionHeads: 32
     layers:
-      - { kind: linear, count: 45, ssmElements: 1048576, convElements: 36864, label: Gated DeltaNet (état constant) }
+      - { kind: linear, count: 45, ssmElements: 1048576, convElements: 36864, label: { fr: "Gated DeltaNet (état constant)", en: "Gated DeltaNet (constant state)" } }
       - { kind: full, count: 15, kvHeads: 2, headDim: 256 }
     maxContext: 262144
     maxContextExtended: 1048576
@@ -1040,7 +1053,8 @@ models:
     ssmStateBytes: 4
     tags: [moe, hybrid, vision]
     confidence: low
-    notes: [Hybride Gated DeltaNet / attention complète, ratio 3:1.]
+    notes:
+      - { fr: "Hybride Gated DeltaNet / attention complète, ratio 3:1.", en: "Hybrid Gated DeltaNet / full attention, 3:1 ratio." }
 
   - id: qwen3.5-35b-a3b
     name: Qwen3.5-35B-A3B
@@ -1055,7 +1069,7 @@ models:
     extraUnquantizedParamsB: 0.4
     attentionHeads: 16
     layers:
-      - { kind: linear, count: 30, ssmElements: 524288, convElements: 24576, label: Gated DeltaNet (état constant) }
+      - { kind: linear, count: 30, ssmElements: 524288, convElements: 24576, label: { fr: "Gated DeltaNet (état constant)", en: "Gated DeltaNet (constant state)" } }
       - { kind: full, count: 10, kvHeads: 2, headDim: 256 }
     maxContext: 262144
     maxContextExtended: 1048576
@@ -1063,7 +1077,8 @@ models:
     officialWeightFormats: [bf16, fp8]
     ssmStateBytes: 4
     tags: [moe, hybrid, vision]
-    notes: [États DeltaNet en FP32 (mamba_ssm_dtype du config.json).]
+    notes:
+      - { fr: "États DeltaNet en FP32 (mamba_ssm_dtype du config.json).", en: "DeltaNet states in FP32 (mamba_ssm_dtype in config.json)." }
 
   - id: qwen3-coder-480b
     name: Qwen3-Coder-480B-A35B
@@ -1115,7 +1130,7 @@ models:
     vocabSize: 151936
     attentionHeads: 16
     layers:
-      - { kind: linear, count: 36, ssmElements: 524288, convElements: 24576, label: Gated DeltaNet (état constant) }
+      - { kind: linear, count: 36, ssmElements: 524288, convElements: 24576, label: { fr: "Gated DeltaNet (état constant)", en: "Gated DeltaNet (constant state)" } }
       - { kind: full, count: 12, kvHeads: 2, headDim: 256 }
     maxContext: 262144
     maxContextExtended: 1048576
@@ -1276,7 +1291,8 @@ models:
     nativeWeightFormat: fp8
     officialWeightFormats: [fp8]
     tags: [moe, reasoning]
-    notes: ["Module MTP (14 B) non compté : il n'est chargé qu'en décodage spéculatif."]
+    notes:
+      - { fr: "Module MTP (14 B) non compté : il n'est chargé qu'en décodage spéculatif.", en: "MTP module (14 B) not counted: it is only loaded for speculative decoding." }
 
   - id: deepseek-v3.1
     name: DeepSeek-V3.1 (671B-A37B)
@@ -1295,7 +1311,8 @@ models:
     nativeWeightFormat: fp8
     officialWeightFormats: [fp8]
     tags: [moe, reasoning]
-    notes: ["Même architecture que DeepSeek-V3 et R1-0528. Module MTP (14 B) non compté."]
+    notes:
+      - { fr: "Même architecture que DeepSeek-V3 et R1-0528. Module MTP (14 B) non compté.", en: "Same architecture as DeepSeek-V3 and R1-0528. MTP module (14 B) not counted." }
 
   - id: deepseek-r1-0528
     name: DeepSeek-R1-0528 (671B-A37B)
@@ -1334,7 +1351,8 @@ models:
     nativeWeightFormat: mxfp4
     officialWeightFormats: [mxfp4]
     tags: [moe, swa, reasoning]
-    notes: ["Experts en MXFP4 natif, attention en BF16 (~65 Go au total). Couches alternées fenêtre 128 / globale, avec attention sinks."]
+    notes:
+      - { fr: "Experts en MXFP4 natif, attention en BF16 (~65 Go au total). Couches alternées fenêtre 128 / globale, avec attention sinks.", en: "Experts in native MXFP4, attention in BF16 (~65 GB total). Alternating window-128 / global layers, with attention sinks." }
 
   - id: gpt-oss-20b
     name: gpt-oss-20b (21B-A3.6B)
@@ -1376,7 +1394,8 @@ models:
     officialWeightFormats: [bf16, fp8]
     checkpoints: { fp8: meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8 }
     tags: [moe, swa, vision]
-    notes: [Licence Llama 4. Attention locale par chunks de 8k sur 36 couches.]
+    notes:
+      - { fr: "Licence Llama 4. Attention locale par chunks de 8k sur 36 couches.", en: "Llama 4 License. Chunked local attention (8k chunks) on 36 layers." }
 
   - id: llama-4-scout
     name: Llama 4 Scout (109B-A17B)
@@ -1396,7 +1415,8 @@ models:
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16]
     tags: [moe, swa, vision]
-    notes: [Contexte annoncé de 10M tokens. Licence Llama 4.]
+    notes:
+      - { fr: "Contexte annoncé de 10M tokens. Licence Llama 4.", en: "Advertised context of 10M tokens. Llama 4 License." }
 
   - id: llama-3.1-405b
     name: Llama 3.1 405B
@@ -1412,7 +1432,8 @@ models:
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
     checkpoints: { fp8: meta-llama/Llama-3.1-405B-Instruct-FP8 }
-    notes: [Licence Llama 3.1.]
+    notes:
+      - { fr: "Licence Llama 3.1.", en: "Llama 3.1 License." }
 
   - id: llama-3.3-70b
     name: Llama 3.3 70B
@@ -1427,7 +1448,8 @@ models:
     maxContext: 131072
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16]
-    notes: [Licence Llama 3.3.]
+    notes:
+      - { fr: "Licence Llama 3.3.", en: "Llama 3.3 License." }
 
   - id: llama-3.1-8b
     name: Llama 3.1 8B
@@ -1442,7 +1464,8 @@ models:
     maxContext: 131072
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16]
-    notes: [Licence Llama 3.1.]
+    notes:
+      - { fr: "Licence Llama 3.1.", en: "Llama 3.1 License." }
 
   # ================================================================ NVIDIA
   - id: nemotron-3-super
@@ -1458,7 +1481,7 @@ models:
     attentionHeads: 32
     numLayers: 88
     layers:
-      - { kind: linear, count: 40, ssmElements: 1048576, convElements: 30720, label: Mamba-2 (état constant) }
+      - { kind: linear, count: 40, ssmElements: 1048576, convElements: 30720, label: { fr: "Mamba-2 (état constant)", en: "Mamba-2 (constant state)" } }
       - { kind: full, count: 8, kvHeads: 2, headDim: 128 }
     maxContext: 262144
     maxContextExtended: 1048576
@@ -1466,7 +1489,8 @@ models:
     officialWeightFormats: [bf16, fp8, nvfp4]
     ssmStateBytes: 4
     tags: [moe, hybrid]
-    notes: ["Hybride Mamba-2 / Transformer, LatentMoE (512 experts). États SSM en FP32 (mamba_ssm_cache_dtype). 1M annoncé par NVIDIA."]
+    notes:
+      - { fr: "Hybride Mamba-2 / Transformer, LatentMoE (512 experts). États SSM en FP32 (mamba_ssm_cache_dtype). 1M annoncé par NVIDIA.", en: "Hybrid Mamba-2 / Transformer, LatentMoE (512 experts). SSM states in FP32 (mamba_ssm_cache_dtype). 1M advertised by NVIDIA." }
 
   - id: nemotron-3-nano
     name: Nemotron 3 Nano (31.6B-A3.6B)
@@ -1481,7 +1505,7 @@ models:
     attentionHeads: 32
     numLayers: 52
     layers:
-      - { kind: linear, count: 23, ssmElements: 524288, convElements: 18432, label: Mamba-2 (état constant) }
+      - { kind: linear, count: 23, ssmElements: 524288, convElements: 18432, label: { fr: "Mamba-2 (état constant)", en: "Mamba-2 (constant state)" } }
       - { kind: full, count: 6, kvHeads: 2, headDim: 128 }
     maxContext: 262144
     maxContextExtended: 1048576
@@ -1489,7 +1513,8 @@ models:
     officialWeightFormats: [bf16, fp8, nvfp4]
     ssmStateBytes: 4
     tags: [moe, hybrid]
-    notes: ["Hybride Mamba-2 / Transformer MoE ; les couches MoE n'ont pas de cache. États SSM en FP32. 1M annoncé par NVIDIA."]
+    notes:
+      - { fr: "Hybride Mamba-2 / Transformer MoE ; les couches MoE n'ont pas de cache. États SSM en FP32. 1M annoncé par NVIDIA.", en: "Hybrid Mamba-2 / Transformer MoE; MoE layers have no cache. SSM states in FP32. 1M advertised by NVIDIA." }
 
   - id: llama-3.3-nemotron-super-49b
     name: Llama-3.3-Nemotron-Super-49B
@@ -1507,7 +1532,8 @@ models:
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
     tags: [reasoning]
-    notes: ["Llama 3.3 70B élagué par NAS : 49 couches d'attention conservées sur 80 (même architecture pour la v1.5)."]
+    notes:
+      - { fr: "Llama 3.3 70B élagué par NAS : 49 couches d'attention conservées sur 80 (même architecture pour la v1.5).", en: "Llama 3.3 70B pruned by NAS: 49 of 80 attention layers kept (same architecture for v1.5)." }
 
   - id: nemotron-nano-9b-v2
     name: Nemotron Nano 9B v2
@@ -1519,7 +1545,7 @@ models:
     attentionHeads: 40
     numLayers: 56
     layers:
-      - { kind: linear, count: 27, ssmElements: 1310720, convElements: 36864, label: Mamba-2 (état constant) }
+      - { kind: linear, count: 27, ssmElements: 1310720, convElements: 36864, label: { fr: "Mamba-2 (état constant)", en: "Mamba-2 (constant state)" } }
       - { kind: full, count: 4, kvHeads: 8, headDim: 128 }
     maxContext: 131072
     nativeWeightFormat: bf16
@@ -1547,9 +1573,10 @@ models:
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16]
     weightFormatNotes: &gemmaFp16
-      fp16: { level: warning, note: "Gemma déborde en FP16 (activations > 65504) : préférez BF16. Sur V100, utilisez un checkpoint quantifié." }
+      fp16: { level: warning, note: { fr: "Gemma déborde en FP16 (activations > 65504) : préférez BF16. Sur V100, utilisez un checkpoint quantifié.", en: "Gemma overflows in FP16 (activations > 65504): prefer BF16. On V100, use a quantized checkpoint." } }
     tags: [vision, swa]
-    notes: ["K et V comptés séparément (attention_k_eq_v partage la projection, pas le cache)."]
+    notes:
+      - { fr: "K et V comptés séparément (attention_k_eq_v partage la projection, pas le cache).", en: "K and V counted separately (attention_k_eq_v shares the projection, not the cache)." }
 
   - id: gemma-4-26b-a4b
     name: Gemma 4 26B-A4B
@@ -1591,7 +1618,8 @@ models:
     officialWeightFormats: [bf16, int4]
     weightFormatNotes: *gemmaFp16
     tags: [vision, swa]
-    notes: [5 couches locales (fenêtre 1024) pour 1 globale. INT4 officiel via QAT.]
+    notes:
+      - { fr: "5 couches locales (fenêtre 1024) pour 1 globale. INT4 officiel via QAT.", en: "5 local layers (window 1024) per global layer. Official INT4 via QAT." }
 
   - id: gemma-3-12b
     name: Gemma 3 12B

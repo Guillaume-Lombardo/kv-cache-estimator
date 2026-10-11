@@ -34,9 +34,9 @@ grep -q 'aria-label="Résultats"' "$test_dir/page.html"
 docker rm -f "$container_id" >/dev/null
 container_id=''
 
-# Change catalogue names so the response proves that the mounted file was loaded.
+# Change a scalar catalogue name without corrupting localized name mappings.
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-sed 's/^    name: /    name: CI_CUSTOM_CATALOGUE_/' \
+sed 's/^    name: H100 SXM$/    name: CI_CUSTOM_CATALOGUE_H100/' \
   "$repo_dir/config/estimator.yaml" > "$test_dir/catalogue.yaml"
 chmod 755 "$test_dir"
 chmod 644 "$test_dir/catalogue.yaml"

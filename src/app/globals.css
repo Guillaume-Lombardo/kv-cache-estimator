@@ -22,8 +22,10 @@
   color-scheme: light;
 }
 
+/* Dark theme: follows the system unless the user chose light (data-theme="light"),
+   or is forced with data-theme="dark". */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0f1216;
     --panel: #171b21;
     --border: #2a3039;
@@ -44,6 +46,27 @@
     --seg-reserve: #3b424d;
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1216;
+  --panel: #171b21;
+  --border: #2a3039;
+  --text: #e6e9ee;
+  --muted: #8d97a5;
+  --accent: #6a9cff;
+  --accent-soft: #1d2a42;
+  --good: #4cc483;
+  --good-soft: #15291e;
+  --bad: #ff6b6b;
+  --bad-soft: #341a1c;
+  --warn: #f0a63a;
+  --warn-soft: #33270f;
+  --info-soft: #1b222c;
+  --seg-weights: #6a8ee6;
+  --seg-kv: #3dbb7d;
+  --seg-free: #24493a;
+  --seg-reserve: #3b424d;
+  color-scheme: dark;
 }
 
 * {
@@ -103,6 +126,61 @@ h2 {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
+}
+.header-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+@media (max-width: 700px) {
+  .header-side {
+    align-items: flex-start;
+  }
+}
+
+/* ---------- Language and theme toggles */
+.prefs {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.lang-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.lang-toggle span,
+.segmented button {
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+.lang-toggle span.on,
+.segmented button.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.segmented button {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: none;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.segmented button:hover:not(.on) {
+  color: var(--text);
 }
 
 .layout {
