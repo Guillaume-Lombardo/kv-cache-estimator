@@ -637,7 +637,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
     out.push({
       severity: m.confidence === "low" ? "warning" : "info",
       title: `Architecture de ${m.name} à vérifier (fiabilité ${m.confidence === "low" ? "faible" : "moyenne"})`,
-      detail: `Comparez avec le config.json${m.source ? ` de ${m.source}` : ""} (npm run import-model) et corrigez le fichier de configuration si besoin.`,
+      detail: `Comparez avec le config.json${m.source ? ` de ${m.source}` : ""} (pnpm run import-model) et corrigez le fichier de configuration si besoin.`,
     });
 
   const order: Record<Severity, number> = { error: 0, warning: 1, info: 2 };

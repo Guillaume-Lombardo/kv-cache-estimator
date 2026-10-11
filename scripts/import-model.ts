@@ -1,7 +1,7 @@
 // Convertit un config.json Hugging Face (ou params.json Mistral) en entrée YAML pour config/estimator.yaml.
 //
 // Usage :
-//   npm run import-model -- chemin/config.json [--params 235] [--active 22] [--id mon-modele]
+//   pnpm run import-model chemin/config.json [--params 235] [--active 22] [--id mon-modele]
 //                           [--name "Mon modèle"] [--family "Qwen (Alibaba)"] [--source org/repo] [--append]
 //
 // --append ajoute l'entrée à la fin du fichier de configuration (section models), puis le valide.
@@ -22,7 +22,7 @@ const opt = (k: string) => {
 
 async function main() {
   if (!file) {
-    console.error("Usage : npm run import-model -- chemin/config.json [--params N] [--active N] [--id …] [--append]");
+    console.error("Usage : pnpm run import-model chemin/config.json [--params N] [--active N] [--id …] [--append]");
     process.exit(2);
   }
   const json = JSON.parse(await readFile(file, "utf8"));

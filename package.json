@@ -26,5 +26,9 @@
     "tsx": "^4.20.0",
     "typescript": "5.9.3",
     "vitest": "3.2.7"
+  },
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

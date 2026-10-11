@@ -4,11 +4,14 @@ Application Next.js / TypeScript (page unique) qui dimensionne le service d'un L
 
 ## Démarrage
 
+Prérequis : Node.js 22.13 ou supérieur et Corepack. La version de pnpm est fixée dans `package.json`.
+
 ```bash
-npm install
-npm run dev            # http://localhost:3000
+corepack enable
+pnpm install --frozen-lockfile
+pnpm run dev            # http://localhost:3000
 # ou en production
-npm run build && npm start
+pnpm run build && pnpm start
 # ou en conteneur
 docker build -t kv-cache-estimator .
 docker run -p 3000:3000 -v $PWD/mon-catalogue.yaml:/config/estimator.yaml \
@@ -18,8 +21,8 @@ docker run -p 3000:3000 -v $PWD/mon-catalogue.yaml:/config/estimator.yaml \
 La configuration (formats, moteurs, GPUs, modèles) est lue côté serveur au démarrage depuis `config/estimator.yaml`. En dev, elle est relue à chaque requête.
 
 ```bash
-KV_ESTIMATOR_CONFIG=/etc/kv/estimator.yaml npm start   # autre fichier (YAML ou JSON)
-npm run check-config                                    # valider sans lancer l'app
+KV_ESTIMATOR_CONFIG=/etc/kv/estimator.yaml pnpm start   # autre fichier (YAML ou JSON)
+pnpm run check-config                                    # valider sans lancer l'app
 ```
 
 Si le fichier est invalide, la page affiche l'erreur précise. Le schéma est strict : une clé inconnue ou mal orthographiée est rejetée.
@@ -27,9 +30,9 @@ Si le fichier est invalide, la page affiche l'erreur précise. Le schéma est st
 ## Ajouter un modèle depuis son config.json
 
 ```bash
-npm run import-model -- chemin/config.json                       # affiche l'entrée YAML
-npm run import-model -- chemin/config.json --append              # l'ajoute au catalogue et le valide
-npm run import-model -- config.json --source org/repo --params 235 --active 22 --id mon-modele
+pnpm run import-model chemin/config.json                       # affiche l'entrée YAML
+pnpm run import-model chemin/config.json --append              # l'ajoute au catalogue et le valide
+pnpm run import-model config.json --source org/repo --params 235 --active 22 --id mon-modele
 ```
 
 On peut faire la même chose dans l'interface, onglet **Importer un modèle** : coller ou charger le fichier, relire l'entrée YAML, la copier, ou tester le modèle tout de suite (il est gardé dans le navigateur).
@@ -188,9 +191,9 @@ Types de couches : `full`, `sliding` (`window`), `mla` (`kvLoraRank`, `ropeHeadD
 ## Tests
 
 ```bash
-npm test          # vitest : formules, réplication TP/PP/DP, offload, débit, dimensionnement,
+pnpm test          # vitest : formules, réplication TP/PP/DP, offload, débit, dimensionnement,
                   # convertisseur sur les 24 config.json, balayage de toutes les combinaisons
-npm run typecheck
+pnpm run typecheck
 ```
 
 La CI GitHub (`.github/workflows/check.yml`) lance la validation du catalogue, le typecheck, les tests et le build.

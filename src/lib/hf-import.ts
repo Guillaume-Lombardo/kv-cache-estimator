@@ -1,6 +1,6 @@
 /**
  * Conversion d'un config.json Hugging Face (ou params.json Mistral) en entrée `models:` du YAML.
- * Utilisé par le script `npm run import-model` et par le panneau d'import de l'interface.
+ * Utilisé par le script `pnpm run import-model` et par le panneau d'import de l'interface.
  */
 import { Document, isMap, isSeq } from "yaml";
 import type { LayerGroup, ModelInput } from "./config-schema";

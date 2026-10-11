@@ -67,7 +67,7 @@ export function ImportPanel({
       <p className="hint">
         Collez le <code>config.json</code> d&apos;un dépôt Hugging Face (ou le <code>params.json</code> de Mistral). L&apos;outil détecte l&apos;architecture (GQA, fenêtre
         glissante, MLA, DSA, Mamba, DeltaNet, KDA), estime les paramètres si besoin et produit l&apos;entrée YAML à ajouter au fichier de configuration. Équivalent en ligne
-        de commande : <code>npm run import-model -- config.json --append</code>.
+        de commande : <code>pnpm run import-model config.json --append</code>.
       </p>
       <div className="import-grid">
         <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder='{ "architectures": ["…"], "hidden_size": … }' spellCheck={false} rows={10} />
