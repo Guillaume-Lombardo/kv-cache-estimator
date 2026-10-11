@@ -1,10 +1,10 @@
-// Convertit un config.json Hugging Face (ou params.json Mistral) en entrée YAML pour config/estimator.yaml.
+// Convert a Hugging Face config.json (or Mistral params.json) into a YAML entry for config/estimator.yaml.
 //
-// Usage :
-//   npm run import-model -- chemin/config.json [--params 235] [--active 22] [--id mon-modele]
-//                           [--name "Mon modèle"] [--family "Qwen (Alibaba)"] [--source org/repo] [--append]
+// Usage:
+//   pnpm run import-model path/config.json [--params 235] [--active 22] [--id my-model]
+//                           [--name "My model"] [--family "Qwen (Alibaba)"] [--source org/repo] [--append]
 //
-// --append ajoute l'entrée à la fin du fichier de configuration (section models), puis le valide.
+// --append adds the entry to the configuration file (models section), then validates it.
 import { readFile, appendFile } from "node:fs/promises";
 import { convertHfConfig, modelToYaml, type ImportOptions } from "../src/lib/hf-import";
 import { configPath, parseConfigFile } from "../src/lib/load-config";
@@ -22,7 +22,7 @@ const opt = (k: string) => {
 
 async function main() {
   if (!file) {
-    console.error("Usage : npm run import-model -- chemin/config.json [--params N] [--active N] [--id …] [--append]");
+    console.error("Usage : pnpm run import-model chemin/config.json [--params N] [--active N] [--id …] [--append]");
     process.exit(2);
   }
   const json = JSON.parse(await readFile(file, "utf8"));

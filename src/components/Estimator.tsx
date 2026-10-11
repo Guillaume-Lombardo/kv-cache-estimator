@@ -49,7 +49,7 @@ function writeStorage(key: string, value: unknown) {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
   } catch {
-    // stockage indisponible (navigation privée…) : sans conséquence
+    // Unavailable storage (e.g. private browsing) is nonfatal.
   }
 }
 
@@ -64,14 +64,14 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
   const [tab, setTab] = useState<TabId>("detail");
   const [linkCopied, setLinkCopied] = useState(false);
 
-  // --- Données propres au navigateur (après hydratation)
+  // --- Browser-specific data (after hydration)
   useEffect(() => {
     const imp = readStorage<ModelSpec[]>(STORAGE.imported, []);
     setImported(imp);
     setPinned(readStorage<Scenario[]>(STORAGE.pinned, []));
     const t = readStorage<TabId>(STORAGE.tab, "detail");
     if (TABS.some((x) => x.id === t)) setTab(t);
-    // Lien vers un modèle importé dans ce navigateur.
+    // Link to a model imported in this browser.
     if (initial.model && imp.some((m) => m.id === initial.model)) setS(scenarioFromQuery(config, [...config.models, ...imp], initial));
   }, []);
   useEffect(() => {
@@ -86,10 +86,10 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
   const kf = config.kvCacheFormats.find((f) => f.id === s.kf)!;
   const ctx = s.ctx;
 
-  // --- Changements avec ajustement automatique
+  // --- Changes with automatic adjustment
   const dpAllowed = (m: ModelSpec, e: EngineSpec) => isMoE(m) && e.features.dpAttention !== false;
 
-  /** Formats après changement de GPU ou de moteur : garde le choix courant si possible, revient au natif si le choix était un repli. */
+  /** After changing GPU or engine, keep the selected format when possible; restore the native format after a fallback. */
   const adjustFormats = (m: ModelSpec, g: GpuSpec, e: EngineSpec, msgs: string[]) => {
     let nextWf = pickWeightFormat(config, m, g, e, s.wf);
     const native = config.weightFormats.find((f) => f.id === m.nativeWeightFormat);
@@ -98,7 +98,7 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
       msgs.push(`Format natif ${native.label} disponible → ${native.label}.`);
     } else if (nextWf !== s.wf) msgs.push(`Poids ${wf.label} non supportés (${g.name}, ${e.name}) → ${nextWf.toUpperCase()}.`);
     let nextKf = pickKvFormat(config, g, e, s.kf);
-    // FP16 imposé par l'absence de BF16 (Volta) : retour en BF16 dès que possible.
+    // FP16 fallback when BF16 is unavailable (Volta): restore BF16 when possible.
     if (nextKf === "fp16" && !usable(kvSupport(gpu, engine, "bf16")) && kvSupport(g, e, "bf16").level === "native") nextKf = "bf16";
     if (nextKf !== s.kf) msgs.push(usable(kvSupport(g, e, s.kf)) ? "KV BF16 disponible → BF16." : `KV ${kf.label} non supporté → ${nextKf.toUpperCase()}.`);
     return { wf: nextWf, kf: nextKf };
@@ -124,7 +124,7 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
     const n = counts.includes(s.gpuCount) ? s.gpuCount : 8;
     if (n !== s.gpuCount) msgs.push(`${s.gpuCount} GPUs non proposé pour ${g.name} → ${n}.`);
     const f = adjustFormats(model, g, engine, msgs);
-    // La mémoire visible personnalisée est propre à une carte : on la réinitialise.
+    // Custom visible memory belongs to one GPU type: reset it when switching.
     if (s.memGiB !== undefined) msgs.push(`Mémoire visible personnalisée (${s.memGiB} Gio) réinitialisée pour ${g.name}.`);
     setNotices(msgs);
     setS({ ...s, gpuId: id, gpuCount: n, tp: defaultTp(model, g, n), ...f, memGiB: undefined });
@@ -189,11 +189,11 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
     writeStorage(STORAGE.tab, t);
   };
 
-  // --- Calculs
+  // --- Calculations
   const input = useMemo(() => resolveScenario(config, models, { ...s, modelId: model.id })!, [config, models, s, model.id]);
   const est = useMemo(() => estimate(input), [input]);
   const issues = useMemo(() => collectIssues(input, est, config.weightFormats), [input, est, config.weightFormats]);
-  /** Erreur bloquante (format, parallélisme, contexte…) : les chiffres restent affichés mais sans statut de réussite. */
+  /** Blocking error (format, parallelism, context, etc.): keep the figures but do not mark them as successful. */
   const blocking = issues.some((i) => i.severity === "error");
   const perf = useMemo(() => estimatePerf(input, est, config.performance), [input, est, config.performance]);
   const byContext = useMemo(() => CONTEXT_STEPS.map((t) => ({ t, e: estimate({ ...input, contextTokens: t }) })), [input]);
@@ -374,7 +374,7 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
       </header>
 
       <main className="layout">
-        {/* ------------------------------------------------ Paramètres */}
+        {/* ------------------------------------------------ Parameters */}
         <section className="panel form" aria-label="Paramètres">
           <div className="field">
             <label className="field-label">Modèle</label>
@@ -526,7 +526,7 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
           </details>
         </section>
 
-        {/* ------------------------------------------------ Résultats */}
+        {/* ------------------------------------------------ Results */}
         <section className="results" aria-label="Résultats">
           <div className="toolbar">
             <button type="button" className="btn" onClick={pin} disabled={pinned.length >= 6} title="Ajouter à la comparaison">

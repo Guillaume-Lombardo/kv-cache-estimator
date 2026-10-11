@@ -2,7 +2,7 @@
   "name": "kv-cache-estimator",
   "version": "0.1.0",
   "private": true,
-  "description": "Estimateur mémoire poids + KV cache pour LLM open-weight sur GPU NVIDIA",
+  "description": "Weight and KV cache memory estimator for open-weight LLMs on NVIDIA GPUs",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -26,5 +26,9 @@
     "tsx": "^4.20.0",
     "typescript": "5.9.3",
     "vitest": "3.2.7"
+  },
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

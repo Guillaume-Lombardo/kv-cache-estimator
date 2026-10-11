@@ -19,7 +19,7 @@ describe("convertHfConfig", async () => {
     const { model } = convertHfConfig(json);
     expect(() => modelSchema.parse(model)).not.toThrow();
     const ref = catalog.find((m) => (json.revision && m.revision === json.revision) || (json.repo && m.source === json.repo));
-    if (!ref) return; // params.json Mistral : pas de révision
+    if (!ref) return; // Mistral params.json: no revision
     expect(modelSchema.parse(model).layers).toEqual(ref.layers);
     expect(model.hiddenSize).toBe(ref.hiddenSize);
     expect(model.attentionHeads).toBe(ref.attentionHeads);

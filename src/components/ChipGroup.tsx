@@ -7,9 +7,9 @@ export interface ChipOption {
   id: string;
   label: ReactNode;
   sub?: ReactNode;
-  /** unsupported : grisé et non cliquable ; limited : badge d'avertissement. */
+  /** unsupported: disabled and greyed out; limited: warning badge. */
   level?: SupportLevel;
-  /** Avertissement non bloquant spécifique (ex. TP invalide). */
+  /** Specific nonblocking warning (e.g. invalid TP). */
   warn?: boolean;
   title?: string;
   star?: boolean;

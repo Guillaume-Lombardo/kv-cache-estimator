@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 /**
- * Niveau de support d'un format sur un GPU ou dans un moteur.
- * unverified : aucune source ne confirme ni n'infirme le support (sélectionnable, signalé).
+ * Support level for a format on a GPU or in an inference engine.
+ * unverified: no source confirms or rules out support (selectable, with a warning).
  */
 export const SUPPORT_LEVELS = ["native", "limited", "unverified", "unsupported"] as const;
 export type SupportLevel = (typeof SUPPORT_LEVELS)[number];
@@ -13,23 +13,23 @@ const supportSchema = z
     z.strictObject({
       level: z.enum(SUPPORT_LEVELS),
       note: z.string().optional(),
-      /** Format effectif en mémoire GPU si le moteur ne garde pas le format du fichier (ex. FP8 déquantifié en BF16). */
+      /** GPU memory format when the engine converts the file format (e.g. FP8 dequantized to BF16). */
       memoryFormat: z.string().optional(),
     }),
   ])
   .transform((v): { level: SupportLevel; note?: string; memoryFormat?: string } => (typeof v === "string" ? { level: v } : v));
 export type Support = z.output<typeof supportSchema>;
 
-/** Capacité d'un moteur : oui, non, ou non vérifiée faute de source. */
+/** Engine capability: supported, unsupported, or unverified without a source. */
 const capabilitySchema = z.union([z.boolean(), z.literal("unverified")]);
 export type Capability = z.output<typeof capabilitySchema>;
 
 const weightFormatSchema = z.strictObject({
   id: z.string(),
   label: z.string(),
-  /** Bits effectifs par paramètre, échelles de quantification incluses. */
+  /** Effective bits per parameter, including quantization scales. */
   bitsPerParam: z.number().positive(),
-  /** Débit de calcul utilisé pour l'estimation de performance. */
+  /** Compute throughput used for performance estimates. */
   compute: z.enum(["bf16", "fp8", "fp4"]),
   description: z.string().optional(),
 });
@@ -37,7 +37,7 @@ const weightFormatSchema = z.strictObject({
 const kvFormatSchema = z.strictObject({
   id: z.string(),
   label: z.string(),
-  /** Octets effectifs par élément stocké, échelles incluses. */
+  /** Effective bytes per stored element, including scales. */
   bytesPerElement: z.number().positive(),
   description: z.string().optional(),
 });
@@ -47,12 +47,12 @@ const gpuSchema = z.strictObject({
   name: z.string(),
   architecture: z.string(),
   computeCapability: z.string(),
-  /** Mémoire visible par le driver, en Gio. */
+  /** Driver-visible memory, in GiB. */
   memoryGiB: z.number().positive(),
   memoryLabel: z.string(),
-  /** Bande passante mémoire, To/s. */
+  /** Memory bandwidth, in TB/s. */
   bandwidthTBs: z.number().positive(),
-  /** Débit tensor core dense (sans sparsité), TFLOPS. */
+  /** Dense tensor-core throughput (without sparsity), in TFLOPS. */
   tflops: z.strictObject({
     bf16: z.number().positive(),
     fp8: z.number().positive().optional(),
@@ -61,16 +61,16 @@ const gpuSchema = z.strictObject({
   interconnect: z.strictObject({
     label: z.string(),
     nvlink: z.boolean(),
-    /** Bande passante GPU↔GPU par GPU, Go/s. */
+    /** GPU-to-GPU bandwidth per GPU, in GB/s. */
     bandwidthGBs: z.number().positive(),
   }),
-  /** GPUs dans un même serveur. */
+  /** GPUs within one server. */
   maxGpusPerNode: z.number().int().positive(),
-  /** GPUs joignables en NVLink (1 = pas de NVLink). */
+  /** GPUs reachable through NVLink (1 means no NVLink). */
   nvlinkDomain: z.number().int().positive(),
-  /** Mémoire CPU attachée (ex. LPDDR5X de Grace) par GPU, Gio. 0 = à saisir. */
+  /** Attached CPU memory (e.g. Grace LPDDR5X) per GPU, in GiB. 0 requires user input. */
   hostMemoryGiBPerGpu: z.number().nonnegative().default(0),
-  /** Lien CPU↔GPU par GPU, Go/s (PCIe ou NVLink-C2C). */
+  /** CPU-to-GPU link per GPU, in GB/s (PCIe or NVLink-C2C). */
   hostLinkGBs: z.number().positive(),
   hostLinkLabel: z.string(),
   weightFormats: z.record(z.string(), supportSchema),
@@ -83,38 +83,38 @@ const engineSchema = z.strictObject({
   name: z.string(),
   description: z.string().optional(),
   confidence: z.enum(["high", "medium", "low"]).default("high"),
-  /** Version ou révision à laquelle le profil se rapporte. */
+  /** Version or revision described by this profile. */
   version: z.string().optional(),
   features: z.strictObject({
-    /** KV paginé (PagedAttention) : blocs alloués à la demande. */
+    /** Paged KV cache (PagedAttention): blocks allocated on demand. */
     kvPaging: capabilitySchema,
-    /** Pool de KV préalloué sur le GPU au démarrage (peut coexister avec la pagination). */
+    /** KV pool preallocated on the GPU at startup (can coexist with paging). */
     kvPoolPreallocated: capabilitySchema,
     prefixCaching: capabilitySchema,
     continuousBatching: capabilitySchema,
-    /** Les noyaux d'attention appliquent la fenêtre glissante (résultat correct). */
+    /** Attention kernels apply the sliding window for correct outputs. */
     slidingWindowAttention: capabilitySchema,
-    /** Les blocs KV sortis de la fenêtre sont libérés : condition de l'économie de VRAM. */
+    /** KV blocks outside the window are freed, which is required to save VRAM. */
     slidingWindowFreesBlocks: capabilitySchema,
     tensorParallel: capabilitySchema,
     pipelineParallel: capabilitySchema,
     /** DP-attention + expert parallel. */
     dpAttention: capabilitySchema,
-    /** Déchargement du KV vers la mémoire CPU. */
+    /** KV cache offloading to CPU memory. */
     kvOffload: capabilitySchema,
   }),
-  /** Précisions ou sources par capacité. */
+  /** Details or sources for each capability. */
   featureNotes: z.record(z.string(), z.string()).default({}),
   sources: z.array(z.strictObject({ label: z.string(), url: z.string() })).default([]),
-  /** Familles de modèles annoncées par le moteur (valeurs de `family`). Absent = pas de restriction. */
+  /** Model families advertised by the engine (`family` values). Omitted means unrestricted. */
   modelFamilies: z.array(z.string()).optional(),
-  /** Absent = non supporté par le moteur. */
+  /** Omitted means unsupported by the engine. */
   weightFormats: z.record(z.string(), supportSchema),
   kvCacheFormats: z.record(z.string(), supportSchema),
-  /** Restrictions par GPU (absent = pas de restriction). */
+  /** Per-GPU restrictions (omitted means unrestricted). */
   gpus: z.record(z.string(), supportSchema).default({}),
   notes: z.array(z.string()).default([]),
-  /** Options de ligne de commande indicatives. */
+  /** Indicative command-line options. */
   flags: z
     .strictObject({
       memoryUtilization: z.string().optional(),
@@ -131,9 +131,9 @@ const gqaFields = {
   count: z.number().int().positive(),
   kvHeads: z.number().int().positive(),
   headDim: z.number().int().positive(),
-  /** Dimension des têtes V si différente de K. */
+  /** V head dimension when it differs from K. */
   headDimV: z.number().int().positive().optional(),
-  /** Octets supplémentaires par token et par couche (indexeur, etc.), indépendants du format KV. */
+  /** Additional bytes per token per layer (indexer, etc.), independent of the KV format. */
   extraBytesPerToken: z.number().nonnegative().optional(),
 };
 
@@ -154,9 +154,9 @@ const layerGroupSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("linear"),
     count: z.number().int().positive(),
-    /** Éléments de l'état récurrent (SSM / DeltaNet / KDA) par couche et par requête. */
+    /** Recurrent state elements (SSM / DeltaNet / KDA) per layer per request. */
     ssmElements: z.number().int().positive(),
-    /** Éléments de l'état de convolution courte par couche et par requête. */
+    /** Short convolution state elements per layer per request. */
     convElements: z.number().int().nonnegative().default(0),
     label: z.string().optional(),
   }),
@@ -172,41 +172,41 @@ export const modelSchema = z.strictObject({
   id: z.string(),
   name: z.string(),
   family: z.string(),
-  /** Dépôt Hugging Face de référence. */
+  /** Reference Hugging Face repository. */
   source: z.string().optional(),
-  /** Révision du config.json utilisé. */
+  /** Revision of the source config.json. */
   revision: z.string().optional(),
   paramsB: z.number().positive(),
   activeParamsB: z.number().positive().optional(),
   hiddenSize: z.number().int().positive(),
   vocabSize: z.number().int().positive(),
   tiedEmbeddings: z.boolean().default(false),
-  /** Paramètres conservés en 16 bits en plus des embeddings (encodeur vision, attention...). */
+  /** Parameters kept at 16 bits in addition to embeddings (vision encoder, attention, etc.). */
   extraUnquantizedParamsB: z.number().nonnegative().default(0),
   attentionHeads: z.number().int().positive(),
-  /** Nombre total de couches du décodeur (num_hidden_layers), si différent des couches à cache (Mamba/MLP, NAS). */
+  /** Total decoder layers (num_hidden_layers), if different from cache-bearing layers (Mamba/MLP, NAS). */
   numLayers: z.number().int().positive().optional(),
-  /** Paramètres des experts routés (MoE), en milliards : seuls ceux-ci sont répartis en DP-attention + EP. */
+  /** Routed expert parameters (MoE), in billions: only these are sharded in DP-attention + EP. */
   expertParamsB: z.number().nonnegative().optional(),
   layers: z.array(layerGroupSchema).min(1),
   maxContext: z.number().int().positive(),
-  /** Contexte atteignable par extension RoPE (YaRN...). */
+  /** Context reachable through RoPE extension (YaRN, etc.). */
   maxContextExtended: z.number().int().positive().optional(),
   nativeWeightFormat: z.string(),
-  /** Bits effectifs réels du checkpoint natif s'ils diffèrent du format générique (ex. INT4 g32 = 4,5). */
+  /** Effective bits in the native checkpoint if different from the generic format (e.g. INT4 g32 = 4.5). */
   nativeBitsPerParam: z.number().positive().optional(),
   officialWeightFormats: z.array(z.string()).default([]),
-  /** Dépôt du checkpoint officiel par format (format natif = source). */
+  /** Official checkpoint repository per format (native format uses source). */
   checkpoints: z.record(z.string(), z.string()).default({}),
-  /** Octets par élément de l'état récurrent (4 si mamba_ssm_cache_dtype = float32). */
+  /** Bytes per recurrent state element (4 when mamba_ssm_cache_dtype = float32). */
   ssmStateBytes: z.number().positive().default(2),
-  /** Octets par élément de l'état de convolution. */
+  /** Bytes per convolution state element. */
   convStateBytes: z.number().positive().default(2),
   weightFormatNotes: z.record(z.string(), formatNoteSchema).default({}),
   kvFormatNotes: z.record(z.string(), formatNoteSchema).default({}),
   tags: z.array(z.string()).default([]),
   notes: z.array(z.string()).default([]),
-  /** Fiabilité des paramètres d'architecture saisis. */
+  /** Confidence in the supplied architecture parameters. */
   confidence: z.enum(["high", "medium", "low"]).default("high"),
 });
 
@@ -225,15 +225,15 @@ export const configSchema = z
       .default({}),
     performance: z
       .strictObject({
-        /** Part de la bande passante mémoire réellement atteinte en décodage. */
+        /** Fraction of memory bandwidth reached during decoding. */
         memoryEfficiency: z.number().min(0.05).max(1).default(0.7),
-        /** Part du débit tensor core atteinte (MFU). */
+        /** Fraction of tensor-core throughput reached (MFU). */
         computeEfficiency: z.number().min(0.05).max(1).default(0.45),
-        /** Latence d'un all-reduce / all-to-all de décodage, µs. */
+        /** Latency of a decoding all-reduce / all-to-all, in microseconds. */
         collectiveLatencyUs: z.strictObject({ nvlink: z.number().positive(), pcie: z.number().positive(), network: z.number().positive() }).default({ nvlink: 8, pcie: 30, network: 40 }),
       })
       .default({ memoryEfficiency: 0.7, computeEfficiency: 0.45, collectiveLatencyUs: { nvlink: 8, pcie: 30, network: 40 } }),
-    /** Nombres de GPUs proposés au-delà de 8. */
+    /** GPU counts offered above 8. */
     largeGpuCounts: z.array(z.number().int().min(9)).default([16, 32, 64, 72]),
     weightFormats: z.array(weightFormatSchema).min(1),
     kvCacheFormats: z.array(kvFormatSchema).min(1),

@@ -1,196 +1,210 @@
-# Estimateur KV cache
+# KV cache estimator
 
-Application Next.js / TypeScript (page unique) qui dimensionne le service d'un LLM open-weight sur GPU NVIDIA : poids du modèle, KV cache par requête, nombre de sessions simultanées, débit approximatif. Elle sert aussi au dimensionnement inverse et à la comparaison de scénarios. Moteur de référence : **vLLM** (et llm-d, qui orchestre des instances vLLM).
+A single-page Next.js / TypeScript application for estimating the memory required to serve open-weight LLMs on NVIDIA GPUs: model weights, KV cache per request, concurrent sessions and approximate throughput. It also supports inverse sizing and scenario comparison. The reference engine is vLLM, including deployments orchestrated by llm-d.
 
-## Démarrage
+The application interface is in French. Repository documentation, Markdown files, source comments and docstrings are written in English.
 
-```bash
-npm install
-npm run dev            # http://localhost:3000
-# ou en production
-npm run build && npm start
-# ou en conteneur
-docker build -t kv-cache-estimator .
-docker run -p 3000:3000 -v $PWD/mon-catalogue.yaml:/config/estimator.yaml \
-  -e KV_ESTIMATOR_CONFIG=/config/estimator.yaml kv-cache-estimator
-```
+## Quick start
 
-La configuration (formats, moteurs, GPUs, modèles) est lue côté serveur au démarrage depuis `config/estimator.yaml`. En dev, elle est relue à chaque requête.
+Requirements: Node.js 22.13 or newer and Corepack. `package.json` pins the pnpm version.
 
 ```bash
-KV_ESTIMATOR_CONFIG=/etc/kv/estimator.yaml npm start   # autre fichier (YAML ou JSON)
-npm run check-config                                    # valider sans lancer l'app
+corepack enable
+pnpm install --frozen-lockfile
+pnpm run dev                 # http://localhost:3000
+# Production
+pnpm run build && pnpm start
 ```
 
-Si le fichier est invalide, la page affiche l'erreur précise. Le schéma est strict : une clé inconnue ou mal orthographiée est rejetée.
-
-## Ajouter un modèle depuis son config.json
+The server reads `config/estimator.yaml` at startup. In development, it reads the file again on each request. Use a YAML or JSON override without rebuilding the application:
 
 ```bash
-npm run import-model -- chemin/config.json                       # affiche l'entrée YAML
-npm run import-model -- chemin/config.json --append              # l'ajoute au catalogue et le valide
-npm run import-model -- config.json --source org/repo --params 235 --active 22 --id mon-modele
+KV_ESTIMATOR_CONFIG=/etc/kv/estimator.yaml pnpm start
+pnpm run check-config                         # Validate the default catalogue
+pnpm run check-config /etc/kv/estimator.yaml    # Validate another file
 ```
 
-On peut faire la même chose dans l'interface, onglet **Importer un modèle** : coller ou charger le fichier, relire l'entrée YAML, la copier, ou tester le modèle tout de suite (il est gardé dans le navigateur).
+Invalid configuration produces an error page. The schema is strict: unknown or misspelled keys are rejected.
 
-Le convertisseur reconnaît les architectures suivantes :
+## Ready-to-run container
 
-- GQA / MHA
-- fenêtre glissante via `layer_types` (Gemma 3/4, gpt-oss), `hybrid_layer_pattern` (MiMo) ou `sliding_window_pattern`
-- attention par chunks (Llama 4)
-- MLA (DeepSeek, Kimi, Mistral Large 3, GLM), y compris l'indexeur DSA avec IndexShare et pooling
-- Mamba-2 (`hybrid_override_pattern`, Nemotron-H)
-- Gated DeltaNet (Qwen3-Next, Qwen3.5)
-- KDA (Kimi Linear, Kimi K3, GLM-5.3-Flash)
-- modèles élagués par NAS (`block_configs`)
-- le `params.json` de Mistral
+Once a release has completed its publication workflow, its image is available at `ghcr.io/guillaume-lombardo/kv-cache-estimator`. Images include the default catalogue and support `linux/amd64` and `linux/arm64`. No GPU is required to run the estimator.
 
-Origine du nombre de paramètres, par ordre de priorité :
+```bash
+# latest follows the most recently published stable release.
+docker run --rm -p 3000:3000 \
+  ghcr.io/guillaume-lombardo/kv-cache-estimator:latest
+```
 
-1. l'option `--params` ;
-2. les métadonnées safetensors, si le fichier est l'enveloppe `{repo, revision, config, parameterMetadata}` de `config/upstream/` ;
-3. une estimation à partir des dimensions (attention, MLP, experts, couches linéaires) ;
-4. le nom du dépôt, si l'estimation n'est pas fiable (tenseurs empaquetés).
+Open <http://localhost:3000>. For reproducible deployments, replace `latest` with a published release tag such as `v0.1.0`, or use the image digest recorded in the workflow summary. `v0.1.0` is an example, not a claim that this release already exists.
 
-Les paramètres actifs des MoE sont estimés. Le format natif est déduit de `quantization_config`, et les états SSM passent en FP32 si le modèle l'impose (`mamba_ssm_cache_dtype`).
+Mount a custom catalogue read-only:
 
-`config/upstream/` contient 24 `config.json` d'origine, avec leur révision. Les tests vérifient que le convertisseur retrouve exactement les couches du catalogue pour chacun.
+```bash
+docker run --rm -p 3000:3000 \
+  --mount "type=bind,src=$PWD/my-catalogue.yaml,dst=/config/estimator.yaml,readonly" \
+  -e KV_ESTIMATOR_CONFIG=/config/estimator.yaml \
+  ghcr.io/guillaume-lombardo/kv-cache-estimator:latest
+```
 
-## Entrées
+The image runs as the non-root `node` user. Mounted files must be readable by that user. The default port is 3000; `PORT`, `HOSTNAME` and `KV_ESTIMATOR_CONFIG` can be overridden at runtime.
 
-| Paramètre | Contrôle |
+To build and test an image locally:
+
+```bash
+docker build -t kv-cache-estimator:local .
+bash scripts/smoke-container.sh kv-cache-estimator:local
+```
+
+## Releases and image publication
+
+The GitHub Actions workflow validates the catalogue, runs TypeScript checks and tests, builds the application, then builds and smoke-tests the production container. The smoke test checks both the bundled catalogue and a mounted YAML override, and verifies that the container runs without root privileges.
+
+Publishing a GitHub Release triggers image publication after those checks pass:
+
+1. Merge the intended changes into `main`.
+2. Create a release with a tag such as `v0.1.0` or `v0.2.0-rc.1`, pointing to the intended commit. Use the GitHub prerelease flag for release candidates.
+3. Publish the release and wait for the `publish` job to succeed.
+4. Use the version tag or digest from the workflow summary.
+
+Stable releases publish their exact tag and `latest`. Prereleases publish only their exact tag and never replace `latest`. Draft releases and ordinary branch pushes do not publish images. Release tags are the image version authority; `package.json` is not used to generate image tags. Avoid republishing a version tag; use digests when immutability matters.
+
+The workflow authenticates to GHCR with `GITHUB_TOKEN` and grants `packages: write` only to the publication job. It attaches OCI metadata, build provenance and an SBOM. The runtime smoke test runs on amd64; the publication job builds both architectures.
+
+After the first publication, check the package's visibility in GitHub Packages. GHCR may create a private package initially. Set it to public for anonymous pulls, or authenticate Docker with an account that can read it. Repository or organization policies must allow Actions to publish packages.
+
+## Import a model
+
+Convert a Hugging Face `config.json` or Mistral `params.json` into a catalogue entry:
+
+```bash
+pnpm run import-model path/config.json
+pnpm run import-model path/config.json --append
+pnpm run import-model config.json --source org/repo --params 235 --active 22 --id my-model
+```
+
+Without `--append`, the command prints YAML. With `--append`, it adds the entry to the catalogue and validates the result. The UI's model import tab also accepts pasted or uploaded JSON. Imported models can be tested and saved in the current browser.
+
+The converter recognizes GQA/MHA, sliding windows (`layer_types`, `hybrid_layer_pattern`, `sliding_window_pattern`), Llama 4 chunked attention, MLA and DSA indexers (including IndexShare and pooling), Mamba-2, Gated DeltaNet, KDA, NAS-pruned `block_configs`, and Mistral's `params.json` structure.
+
+Parameter counts use this priority:
+
+1. The explicit `--params` option.
+2. Safetensors metadata from a `{repo, revision, config, parameterMetadata}` envelope, as stored in `config/upstream/`.
+3. An estimate from architecture dimensions: attention, MLPs, experts and linear layers.
+4. The repository name when a dimension-based estimate is unreliable, for example with packed tensors.
+
+Active MoE parameters are estimates. The native format comes from `quantization_config`; SSM state uses FP32 when the configuration requires it (`mamba_ssm_cache_dtype`). The 24 upstream snapshots include source revisions. Tests check that the converter reproduces the catalogue's layer definitions for each snapshot.
+
+## Inputs
+
+| Input | Control |
 |---|---|
-| Modèle | recherche textuelle (nom, famille, `moe`, `vision`, `mla`, `hybride`…) |
-| Contexte | 8k → 1M par doublement ; crans au-delà du natif marqués (orange : YaRN, rouge : hors limite) |
-| Carte | V100, L40S, H100, H200, GH200 (96 / 144 Go), B200, GB200, B300, GB300 |
-| Nombre de cartes | 1 à 8, puis 16, 32, 64 (et 72 en NVL72) |
-| Parallélisme | TP / PP avec choix du degré de TP (PP = cartes ÷ TP), ou DP-attention + EP pour les MoE |
-| Moteur | vLLM / llm-d, ZML / LLMD : un format doit être supporté par la carte **et** par le moteur |
-| Formats | poids BF16, FP16, FP8, INT8, INT4, MXFP4, NVFP4 ; KV BF16, FP16, FP8, NVFP4 |
-| Réserve | % de chaque GPU laissé aux activations et graphes CUDA (≈ `--gpu-memory-utilization`) |
-| Options avancées | mémoire visible par GPU (valeur `nvidia-smi`), offload du KV en RAM CPU |
+| Model | Search by name, family or architecture keyword |
+| Context | Doubling steps from 8k to 1M; extended and unsupported contexts are marked |
+| GPU | V100, L40S, H100, H200, GH200 (96 / 144 GB), B200, GB200, B300, GB300 |
+| GPU count | 1 to 8, then 16, 32, 64; 72 for NVL72 domains |
+| Parallelism | TP/PP with selectable TP degree (PP = GPU count / TP), or DP-attention + EP for MoE |
+| Engine | vLLM / llm-d or ZML / LLMD; both GPU and engine must support the format |
+| Formats | BF16, FP16, FP8, INT8, INT4, MXFP4, NVFP4 weights; BF16, FP16, FP8, NVFP4 KV |
+| Reserve | Percentage of each GPU reserved for activations and CUDA graphs, similar to `--gpu-memory-utilization` |
+| Advanced | Visible memory per GPU from `nvidia-smi`, KV offload to CPU RAM |
 
-L'état complet est dans l'URL, il suffit de copier le lien pour partager une configuration.
+The URL stores the scenario settings for sharing. Models imported only into browser storage must also be available in the receiving browser.
 
-## Résultats
+## Results and limitations
 
-- **Indicateurs principaux** : poids du modèle (total et par GPU), KV par requête (logique et réel s'il y a réplication), modèle + 1 KV, KV total disponible en Gio et en sessions.
-- **Débit estimé** : une session seule, pleine charge, temps de prefill du contexte.
-- Répartition de la mémoire d'un GPU, limitations et avertissements.
-- **Détail** : KV par type de couche, sessions pour chaque contexte, commande `vllm serve` indicative.
-- **Débit** : tok/s par session et agrégés selon le nombre de sessions actives, limite (mémoire ou calcul), offload CPU.
-- **Dimensionnement** : pour un objectif de N sessions, nombre minimal de cartes par type de GPU et meilleur parallélisme ; contexte maximal pour N sessions sur la configuration actuelle.
-- **Comparaison** : jusqu'à 6 scénarios épinglés côte à côte.
-- **Export JSON** du scénario et des résultats.
+The main indicators show model weights (total and per GPU), logical and replicated KV per request, model plus one KV cache, free KV memory in GiB, and concurrent sessions. Other panels provide:
 
-## Signalement des limitations
+- Per-layer KV details, sessions at each context step and an indicative `vllm serve` command.
+- Estimated per-session and aggregate throughput, prefill time, memory/compute limits and CPU offload.
+- Inverse sizing: minimum GPU count and parallelism for a target session count, plus the maximum context on the current configuration.
+- Up to six pinned scenarios for comparison, and a JSON export.
 
-- **Option grisée et barrée (✕)** : non supportée par la carte ou le moteur (BF16 / FP8 sur V100, KV NVFP4 hors Blackwell, DP-attention sur un modèle dense, TP qui ne divise pas les têtes…). Raison au survol.
-- **Bordure pointillée orange (⚠)** : possible mais limité (FP4 émulé sur Hopper/Ada, INT8 bridé sur Blackwell Ultra, KV NVFP4 expérimental dans vLLM, TP sans NVLink, multi-nœuds, profil moteur non vérifié).
-- **Ligne de résumé** sous chaque groupe de formats.
-- **Ajustement automatique (🔁)** : quand on change de carte, de moteur ou de modèle et que le choix n'est plus possible, l'app bascule sur le meilleur choix et le signale. Elle revient au format natif dès qu'il redevient disponible.
-- **Panneau d'avertissements** classé par gravité (⛔ / ⚠️ / ℹ️).
+Unsupported options are disabled with a reason on hover. Limited or unverified options remain selectable with warnings. Format choices adjust when switching model, GPU or engine, with a notice explaining the fallback. Warnings are ordered by severity.
 
-## Profils moteur
+Any blocking error marks the configuration invalid. The UI retains theoretical memory figures but removes success indicators. Invalid configurations are excluded from sizing recommendations and comparison winners.
 
-Chaque moteur déclare, avec une note et une source pour chaque point :
+## Engine profiles
 
-- **Formats** : niveau de support pour chaque format de poids et de KV (natif, limité, **non vérifié**, non supporté). Un format « non vérifié » reste sélectionnable mais il est signalé.
-- **Format en mémoire** : `memoryFormat` indique si le moteur garde le format du fichier ou s'il le déquantifie au chargement (ex. fichier FP8 → BF16 en VRAM). La VRAM est calculée sur le format en mémoire. Si ce point n'est pas vérifié, le calcul garde le format du fichier et l'avertissement donne aussi la taille en BF16.
-- **Capacités à trois états** (oui / non / non vérifié) : KV paginé, pool KV préalloué (les deux peuvent coexister), prefix caching, continuous batching, attention glissante, libération des blocs hors fenêtre, TP, PP, DP-attention, offload.
-- **Fenêtres glissantes** : l'économie de VRAM n'est appliquée que si le moteur supporte l'attention glissante **et** libère effectivement les blocs hors fenêtre. Sans support de l'attention glissante, c'est une erreur (résultats faux). Si la libération n'est pas confirmée, le contexte complet est compté.
+Each profile declares weight and KV format support (`native`, `limited`, `unverified`, `unsupported`). An unverified format remains selectable but carries a warning.
 
-**ZML / LLMD** (et non llm-d) :
+`memoryFormat` describes a conversion performed at load time, such as an FP8 file dequantized into BF16 GPU memory. Memory estimates use the loaded format. When the loaded precision is unverified, the estimate assumes the file format and also reports the BF16 alternative.
 
-- **Capacités serveur**, d'après la [documentation LLMD](https://zml.ai/llmd/) : PagedAttention, continuous batching, tensor parallel, prefix caching.
-- **Formats, précision du KV et fenêtres glissantes**, d'après le code de la [bibliothèque ZML @3500e88](https://github.com/zml/zml/tree/3500e88cf84e0e98d37b0f6048e6af9d33bc6108) (9 octobre 2026), backend CUDA, car le code de LLMD n'est pas public :
-  - poids FP8 / MXFP4 / NVFP4 : présents et gardés quantifiés en mémoire, mais leur chargement par LLMD n'est pas vérifié ;
-  - INT4 / INT8 : non implémentés (TODO dans `zml/nn.zig`) ;
-  - KV FP8 : refusé par FA2/FA3, désactivé dans le wrapper Triton ;
-  - fenêtre glissante : appliquée par les noyaux, mais aucune libération de pages dans la bibliothèque. Aucune économie de VRAM n'est donc appliquée.
-- Le profil indique ce qui reste à vérifier (pool préalloué, PP, DP-attention, offload).
+Capabilities use three states: `true`, `false`, or `unverified`. They cover KV paging, pool preallocation, prefix caching, continuous batching, sliding-window attention, block reclamation, TP, PP, DP-attention and offload. Paging and pool preallocation can coexist.
 
-## Modèle de calcul
+Sliding-window memory savings require both `slidingWindowAttention: true` and `slidingWindowFreesBlocks: true`. Missing attention support is a blocking error because model outputs would be incorrect. Unverified block reclamation means allocating the full context.
 
-- **Poids** = paramètres × bits effectifs (échelles incluses : INT4 g128 = 4,25 bits, NVFP4 = 4,5 bits…). Embeddings, lm_head et encodeur vision restent en 16 bits si on quantifie. `nativeBitsPerParam` corrige les checkpoints natifs particuliers (Kimi K2.5 en INT4 g32 = 4,5 bits).
-- **GQA/MHA** : couches × têtes KV × (dim K + dim V) × octets × tokens.
-- **Fenêtre glissante** : plafonnée à la fenêtre si le moteur le gère (`slidingWindowOptimized`), sinon contexte complet.
-- **MLA** : couches × (rang latent + dim RoPE) × octets × tokens ; indexeur DSA en FP8 (+ échelle) en plus.
-- **Linéaire / SSM** : état SSM (`ssmStateBytes`, FP32 si imposé) + état de convolution, constant par requête.
-- **TP** : têtes KV réparties, répliquées si TP > têtes KV ; latent MLA copié sur chaque rang TP.
-- **PP** : couches entières par étage. On dimensionne le rang le plus chargé : ⌈couches ÷ PP⌉ couches, en prenant les plus coûteuses en KV puisque l'ordre exact n'est pas connu. Ce rang porte aussi les embeddings d'entrée ou de sortie (copiés sur les deux bords s'ils sont liés). PP supérieur au nombre de couches = erreur.
-- **DP-attention + EP** : seuls les experts routés (`expertParamsB`) sont répartis. Attention, embeddings, couches denses et experts partagés sont présents sur chaque GPU, à leur précision réelle (BF16 pour les tensors non quantifiés). Sans `expertParamsB`, la capacité n'est pas validée (erreur). Chaque requête vit sur un seul GPU.
-- **Sessions** = ⌊(mémoire GPU × (1 − réserve) − poids du GPU le plus chargé) ÷ KV par requête de ce GPU⌋, au contexte maximal (pire cas). Prefix caching ignoré.
-- **KV total disponible** : mémoire libre physique totale (N × mémoire utilisable − poids physiques, réplications comprises). Le budget prudent (mémoire libre du GPU le plus chargé × N), qui sert au calcul des sessions, est affiché à côté quand il diffère (PP inégal).
-- **Configuration invalide** (au moins une erreur bloquante) : les indicateurs gardent les chiffres, mais ils sont présentés comme une « capacité mémoire théorique », en rouge et sans statut de réussite.
-- **Modèle + 1 KV** : occupation physique réelle (réplications du KV en TP, poids répliqués en DP-attention ou en PP). La somme logique est affichée à côté si elle diffère. Le verdict « tient » porte sur le GPU le plus chargé.
-- **Recommandations** (dimensionnement, contexte maximal, meilleure colonne de la comparaison) : seules les configurations sans erreur bloquante sont retenues (formats, parallélisme, contexte du modèle, capacité). La mémoire visible personnalisée ne s'applique qu'à la carte pour laquelle elle a été saisie.
-- **Commande indicative** : elle utilise le dépôt du format natif ou celui déclaré dans `checkpoints`. Sinon, le checkpoint reste à fournir et la commande le signale.
-- **Offload CPU** : sessions supplémentaires gardées en RAM (en attente, préemptées, prefix cache). Elles n'augmentent pas la concurrence de décodage. Temps de rechargement = KV par GPU ÷ lien CPU↔GPU.
-- **Débit** : temps d'une étape = max(octets lus ÷ (bande passante × efficacité), FLOPs ÷ (TFLOPS × MFU)) + latence des collectives. Pour un MoE, les octets lus incluent les experts touchés par le batch, plus le KV des sessions actives. En PP, l'étape traverse les étages. Le prefill est calculé en FLOPs (attention causale incluse). Réglages dans `performance:` du YAML.
+### ZML / LLMD
 
-## Fichier de configuration
+The profile distinguishes ZML's LLMD server from llm-d, the vLLM orchestrator.
 
-Sections : `defaults`, `performance`, `largeGpuCounts`, `weightFormats`, `kvCacheFormats`, `engines`, `gpus`, `models`. Voir les commentaires de `config/estimator.yaml`.
+Server capabilities (PagedAttention, continuous batching, tensor parallelism and prefix caching) come from the [LLMD documentation](https://zml.ai/llmd/). Format, KV precision and sliding-window observations refer to the CUDA backend of [ZML at revision 3500e88](https://github.com/zml/zml/tree/3500e88cf84e0e98d37b0f6048e6af9d33bc6108), dated October 9, 2026. They do not establish that LLMD exposes every library capability:
+
+- FP8, MXFP4 and NVFP4 weights exist in the library and remain quantized in memory; LLMD loading support is unverified.
+- INT4 and INT8 are TODOs in `zml/nn.zig`.
+- FP8 KV is rejected by FA2/FA3 and disabled in the Triton wrapper.
+- Kernels apply sliding-window attention, but the library does not reclaim pages outside the window, so the profile applies no VRAM savings.
+
+Pool preallocation, PP, DP-attention and offload remain unverified in this profile.
+
+## Calculation model
+
+- Weights use parameter counts and effective bits, including quantization scales (for example INT4 g128 = 4.25 bits and NVFP4 = 4.5 bits). Embeddings, lm_head and designated unquantized parameters stay at 16 bits. `nativeBitsPerParam` handles specific native checkpoints, such as Kimi K2.5 INT4 g32 at 4.5 bits.
+- GQA/MHA KV = layers x KV heads x (K dimension + V dimension) x bytes x tokens.
+- Sliding-window KV is capped only when the engine both applies the window and frees expired blocks.
+- MLA KV = layers x (latent rank + RoPE dimension) x bytes x tokens, plus DSA indexer storage and scales where applicable.
+- Linear/SSM cache is recurrent state plus convolution state, constant per request. `ssmStateBytes` can require FP32.
+- TP shards KV heads and replicates them when TP exceeds their count. Each TP rank stores a full MLA latent.
+- PP uses whole layers and sizes for the most heavily loaded stage: ceil(layers / PP), selecting the most expensive cache layers because exact ordering is unknown. Input/output embeddings are included; tied embeddings are copied at both ends. PP greater than the decoder layer count is invalid.
+- DP-attention + EP shards only routed experts (`expertParamsB`). All non-expert tensors remain on every GPU at their respective precisions. Unknown expert parameter counts block capacity validation. Each request resides on one GPU.
+- Sessions = floor((usable memory on the limiting GPU - its weights) / its KV per request). DP-attention sums the per-GPU session counts. Every session uses its full selected context; prefix reuse is ignored.
+- Total physical free KV memory = total usable memory - physical weights, including replicas. A separate conservative budget multiplies the limiting GPU's free memory by GPU count. This budget drives session capacity and is shown when it differs from physical free memory.
+- Model plus one KV reports physical usage, including replication. Its fit verdict uses the limiting GPU; a logical sum is also shown when different.
+- Recommendations exclude blocking format, parallelism, context and capacity errors. A visible-memory override applies only to its original GPU type.
+- Launch commands use the native repository or a format-specific `checkpoints` mapping. Missing checkpoints are explicitly marked as required input.
+- CPU offload parks queued, preempted or reusable sessions. It does not increase simultaneous decoding capacity. Reload time = per-GPU KV / CPU-to-GPU bandwidth.
+- Decode step time = max(bytes read / effective bandwidth, FLOPs / effective compute throughput) + collective latency. MoE reads account for experts touched by the batch. PP traverses stages. Prefill uses FLOPs including causal attention. See `performance` in the catalogue for efficiency assumptions.
+
+These are capacity and first-order performance estimates, not deployment benchmarks. Validate the chosen model, backend and hardware combination before relying on the result for production sizing.
+
+## Configuration schema
+
+Top-level sections are `defaults`, `performance`, `largeGpuCounts`, `weightFormats`, `kvCacheFormats`, `engines`, `gpus` and `models`. See the English comments in `config/estimator.yaml` and the strict schema in `src/lib/config-schema.ts`.
+
+Example model entry to add under `models` in a complete catalogue:
 
 ```yaml
-engines:
-  - id: vllm
-    name: vLLM / llm-d
-    features: { slidingWindowOptimized: true, dpAttention: true, kvOffload: true }
-    weightFormats: { bf16: native, fp8: native, nvfp4: native }            # absent = non supporté
-    kvCacheFormats: { bf16: native, fp8: native, nvfp4: { level: limited, note: "expérimental" } }
-    gpus: { v100: { level: limited, note: "support non garanti" } }
-
-gpus:
-  - id: h100
-    name: H100 SXM
-    memoryGiB: 79.6                     # mémoire vue par nvidia-smi
-    bandwidthTBs: 3.35
-    tflops: { bf16: 989, fp8: 1979 }    # dense
-    interconnect: { label: "NVLink 4", nvlink: true, bandwidthGBs: 450 }
-    maxGpusPerNode: 8
-    nvlinkDomain: 8
-    hostLinkGBs: 55
-    hostLinkLabel: PCIe Gen5 x16
-    weightFormats: { fp8: native, nvfp4: { level: limited, note: "W4A16 via Marlin" } }
-    kvCacheFormats: { bf16: native, fp8: native }
-
-models:
-  - id: qwen3-32b
-    name: Qwen3-32B
-    family: Qwen (Alibaba)
-    source: Qwen/Qwen3-32B
-    revision: 9216db5781bf21249d130ec9da846c4624c16137
-    paramsB: 32.76
-    hiddenSize: 5120
-    vocabSize: 151936
-    attentionHeads: 64
-    layers:
-      - { kind: full, count: 64, kvHeads: 8, headDim: 128 }
-    maxContext: 32768
-    maxContextExtended: 131072
-    nativeWeightFormat: bf16
-    officialWeightFormats: [bf16, fp8, int4]
+- id: qwen3-32b
+  name: Qwen3-32B
+  family: Qwen (Alibaba)
+  source: Qwen/Qwen3-32B
+  revision: 9216db5781bf21249d130ec9da846c4624c16137
+  paramsB: 32.76
+  hiddenSize: 5120
+  vocabSize: 151936
+  attentionHeads: 64
+  layers:
+    - { kind: full, count: 64, kvHeads: 8, headDim: 128 }
+  maxContext: 32768
+  maxContextExtended: 131072
+  nativeWeightFormat: bf16
+  officialWeightFormats: [bf16, fp8, int4]
 ```
 
-Types de couches : `full`, `sliding` (`window`), `mla` (`kvLoraRank`, `ropeHeadDim`, `extraBytesPerToken`), `linear` (`ssmElements`, `convElements`).
+Layer kinds are `full`, `sliding` (`window`), `mla` (`kvLoraRank`, `ropeHeadDim`, `extraBytesPerToken`) and `linear` (`ssmElements`, `convElements`).
 
-### Catalogue et fiabilité
+The catalogue contains 64 models across Mistral, Z.ai (GLM), Moonshot (Kimi), Xiaomi (MiMo), Qwen, NVIDIA, Google (Gemma), DeepSeek, OpenAI (gpt-oss) and Meta (Llama). Entries with a verified configuration revision have upstream snapshots in `config/upstream/`, originally collected on `feat/kv-cache-estimator`. Other entries use public architecture information with a `confidence` level (`high`, `medium`, `low`); the UI marks medium and low confidence. Some active parameter counts, including Kimi K3, GLM-5.3 and MiMo-V2.6-Pro, are estimates.
 
-64 modèles : Mistral, Z.ai (GLM), Moonshot (Kimi), Xiaomi (MiMo), Qwen, NVIDIA, Google (Gemma), DeepSeek, OpenAI (gpt-oss), Meta (Llama).
-
-- Les modèles marqués **« config vérifiée »** (champ `revision`) ont été vérifiés contre leur `config.json` d'origine. Les copies sont dans `config/upstream/`, reprises de la branche `feat/kv-cache-estimator`.
-- Les autres viennent de connaissances publiques. Le champ `confidence` (`high`, `medium`, `low`) l'indique, et l'interface affiche un badge pour les deux derniers niveaux.
-- Les paramètres actifs de certains modèles récents (Kimi K3, GLM-5.3, MiMo-V2.6-Pro) sont estimés.
-
-## Tests
+## Development checks
 
 ```bash
-npm test          # vitest : formules, réplication TP/PP/DP, offload, débit, dimensionnement,
-                  # convertisseur sur les 24 config.json, balayage de toutes les combinaisons
-npm run typecheck
+pnpm run check-config
+pnpm run typecheck
+pnpm test
+pnpm run build
 ```
 
-La CI GitHub (`.github/workflows/check.yml`) lance la validation du catalogue, le typecheck, les tests et le build.
+Tests cover formulas, TP/PP/DP replication, offload, throughput, sizing, the 24 upstream configuration imports and a configuration matrix. GitHub Actions also builds and smoke-tests the production image.
+
+Keep source comments, docstrings and Markdown artifacts in English. Preserve French UI text and catalogue messages unless a change explicitly includes interface translation. Do not edit upstream configuration snapshots to translate external source data.

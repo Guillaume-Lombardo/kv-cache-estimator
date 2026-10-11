@@ -2,7 +2,7 @@ import { CONTEXT_STEPS, isMoE, memoryFormatFor, type EstimateInput, type Paralle
 import type { AppConfig, ModelSpec } from "./config-schema";
 import { defaultTp, divisors, gpuCountOptions, pickKvFormat, pickWeightFormat } from "./planning";
 
-/** État complet d'un scénario : sérialisable dans l'URL, épinglable pour comparaison. */
+/** Complete scenario state: URL-serializable and pinnable for comparison. */
 export interface Scenario {
   modelId: string;
   ctx: number;
@@ -14,9 +14,9 @@ export interface Scenario {
   wf: string;
   kf: string;
   reservePct: number;
-  /** Mémoire visible par GPU (Gio) si différente du catalogue. */
+  /** Visible memory per GPU (GiB), if different from the catalogue. */
   memGiB?: number;
-  /** Mémoire CPU d'offload par GPU (Gio). */
+  /** CPU offload memory per GPU (GiB). */
   offloadGiB: number;
 }
 
@@ -29,7 +29,7 @@ export function nearestContext(tokens: number | undefined, fallback = 32768): nu
 
 const numParam = (v: string | undefined) => (v !== undefined && v !== "" && Number.isFinite(Number(v)) ? Number(v) : undefined);
 
-/** Construit un scénario valide à partir de paramètres d'URL (incomplets ou périmés). */
+/** Build a valid scenario from potentially incomplete or outdated URL parameters. */
 export function scenarioFromQuery(cfg: AppConfig, models: ModelSpec[], q: QueryParams): Scenario {
   const d = cfg.defaults;
   const model = models.find((m) => m.id === q.model) ?? models.find((m) => m.id === d.model) ?? models[0];
@@ -38,7 +38,7 @@ export function scenarioFromQuery(cfg: AppConfig, models: ModelSpec[], q: QueryP
   const counts = gpuCountOptions(cfg, gpu);
   const nq = numParam(q.n);
   const gpuCount = nq !== undefined && counts.includes(nq) ? nq : counts.includes(d.gpuCount ?? 1) ? (d.gpuCount ?? 1) : 1;
-  // Compatibilité : anciens liens ?p=tp|pp|dp-attention
+  // Compatibility with legacy links: ?p=tp|pp|dp-attention
   let mode: ParallelMode = q.mode === "dp-ep" || q.p === "dp-attention" ? "dp-ep" : "tp-pp";
   if (mode === "dp-ep" && (!isMoE(model) || engine.features.dpAttention === false)) mode = "tp-pp";
   const tpq = numParam(q.tp) ?? (q.p === "pp" ? 1 : q.p === "tp" ? gpuCount : undefined);
@@ -80,7 +80,7 @@ export function scenarioToQuery(s: Scenario): string {
   return q.toString();
 }
 
-/** Résout un scénario en entrée de calcul (null si un identifiant n'existe plus). */
+/** Resolve a scenario to calculator input (null if an identifier no longer exists). */
 export function resolveScenario(cfg: AppConfig, models: ModelSpec[], s: Scenario): EstimateInput | null {
   const model = models.find((m) => m.id === s.modelId);
   const gpu = cfg.gpus.find((g) => g.id === s.gpuId);
@@ -106,9 +106,9 @@ export function resolveScenario(cfg: AppConfig, models: ModelSpec[], s: Scenario
 }
 
 /**
- * Commande de lancement indicative pour les moteurs qui déclarent leurs options.
- * Le dépôt du catalogue ne correspond qu'au format natif : pour un autre format, le checkpoint
- * reste à fournir et la commande le signale au lieu de prétendre reproduire le scénario.
+ * Indicative launch command for engines that declare their CLI options.
+ * The catalogue repository covers only the native format. For another format, the checkpoint
+ * must be supplied; the command states this rather than claiming to reproduce the scenario.
  */
 export function launchCommand(input: EstimateInput, tp: number, pp: number): { text: string; matchesScenario: boolean } | null {
   const { engine, model, gpuCount, mode, kvFormat, reservePct, contextTokens, weightFormat } = input;

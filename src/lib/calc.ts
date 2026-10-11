@@ -11,7 +11,7 @@ import type {
 
 export const GIB = 1024 ** 3;
 
-/** 8k → 1M par doublement (puissances de 2). */
+/** 8k to 1M in doubling steps (powers of 2). */
 export const CONTEXT_STEPS = [8, 16, 32, 64, 128, 256, 512, 1024].map((k) => k * 1024);
 
 export function contextLabel(tokens: number): string {
@@ -19,7 +19,7 @@ export function contextLabel(tokens: number): string {
   return `${Math.round(tokens / 1024)}k`;
 }
 
-/** tp-pp : TP dans un étage, PP entre étages (tp = n → TP pur, tp = 1 → PP pur). dp-ep : DP-attention + expert parallel. */
+/** tp-pp: TP within a stage, PP across stages (tp = n: pure TP; tp = 1: pure PP). dp-ep: DP-attention + expert parallelism. */
 export type ParallelMode = "tp-pp" | "dp-ep";
 
 export interface EstimateInput {
@@ -28,19 +28,19 @@ export interface EstimateInput {
   engine: EngineSpec;
   gpuCount: number;
   mode: ParallelMode;
-  /** Degré de TP (mode tp-pp) ; PP = gpuCount / tp. */
+  /** TP degree (tp-pp mode); PP = gpuCount / tp. */
   tp: number;
   contextTokens: number;
-  /** Format du fichier de poids. */
+  /** Weight file format. */
   weightFormat: WeightFormat;
-  /** Format effectif en mémoire GPU, si le moteur ne conserve pas celui du fichier. */
+  /** Effective GPU memory format when the engine converts the file format. */
   memoryWeightFormat?: WeightFormat;
   kvFormat: KvFormat;
-  /** Part de la mémoire de chaque GPU laissée aux activations, graphes CUDA, fragmentation. */
+  /** Fraction of each GPU's memory reserved for activations, CUDA graphs and fragmentation. */
   reservePct: number;
-  /** Mémoire visible par GPU si différente du catalogue (nvidia-smi). */
+  /** Visible memory per GPU when different from the catalogue (nvidia-smi). */
   memoryGiBOverride?: number;
-  /** Mémoire CPU dédiée au déchargement du KV, par GPU. */
+  /** CPU memory dedicated to KV offload, per GPU. */
   offloadGiBPerGpu?: number;
 }
 
@@ -56,11 +56,11 @@ export interface GroupBreakdown {
   label: string;
   count: number;
   detail: string;
-  /** Octets pour une requête au contexte demandé (vue logique, sans réplication). */
+  /** Bytes for one request at the selected context (logical view, without replication). */
   bytes: number;
-  /** Octets stockés sur un GPU pour une requête, selon le parallélisme. */
+  /** Bytes stored on one GPU for one request, accounting for parallelism. */
   perGpuBytes: number;
-  /** Facteur de réplication du cache entre GPUs (1 = pas de duplication). */
+  /** Cache replication factor across GPUs (1 means no duplication). */
   replication: number;
 }
 
@@ -69,27 +69,27 @@ export interface Estimate {
   pp: number;
   weights: {
     bitsPerParam: number;
-    /** Poids du modèle (une copie). */
+    /** Model weights (one copy). */
     totalBytes: number;
-    /** Poids sur le GPU le plus chargé. */
+    /** Weights on the most heavily loaded GPU. */
     perGpuBytes: number;
     quantizedParams: number;
     unquantizedParams: number;
-    /** DP-attention : tensors non experts présents sur chaque GPU. */
+    /** DP-attention: non-expert tensors stored on every GPU. */
     nonExpertBytes: number;
-    /** Copies supplémentaires de poids (DP-attention, embeddings liés en PP). */
+    /** Additional weight copies (DP-attention, tied embeddings in PP). */
     replicatedBytes: number;
-    /** DP-attention sans nombre de paramètres des experts : capacité non validée. */
+    /** DP-attention without an expert parameter count: capacity is not validated. */
     dpUnvalidated: boolean;
   };
-  /** Couches par étage PP sur le rang le plus chargé. */
+  /** Layers per PP stage on the most heavily loaded rank. */
   layersPerStage: number;
   kv: {
-    /** KV d'une requête, vue logique. */
+    /** KV cache for one request, logical view. */
     perRequestBytes: number;
-    /** Mémoire réellement consommée par une requête sur l'ensemble des GPUs. */
+    /** Physical memory consumed by one request across all GPUs. */
     perRequestClusterBytes: number;
-    /** Mémoire consommée par une requête sur le GPU qui l'héberge. */
+    /** Memory consumed by one request on its hosting GPU. */
     perRequestPerGpuBytes: number;
     perTokenBytes: number;
     constantBytes: number;
@@ -100,21 +100,21 @@ export interface Estimate {
     reservePerGpuBytes: number;
     usablePerGpuBytes: number;
     freeForKvPerGpuBytes: number;
-    /** Mémoire libre physique totale : N × mémoire utilisable − poids physiques (réplications comprises). */
+    /** Total physical free memory: N x usable memory minus physical weights, including replicas. */
     freeForKvTotalBytes: number;
-    /** Budget prudent : mémoire libre du GPU le plus chargé × N (base du nombre de sessions). */
+    /** Conservative budget: free memory on the most heavily loaded GPU x N (used for session capacity). */
     kvBudgetTotalBytes: number;
   };
   offload: {
     totalBytes: number;
-    /** Sessions supplémentaires pouvant être gardées en mémoire CPU (préemptées / en attente). */
+    /** Additional sessions that can be parked in CPU memory (preempted or queued). */
     parkedSessions: number;
-    /** Temps de rechargement d'une session complète vers le GPU, ms. */
+    /** Time to reload a full session onto the GPU, in ms. */
     reloadMs: number;
   };
-  /** Somme logique poids + une requête (sans réplication). */
+  /** Logical sum of weights and one request, without replication. */
   modelPlusOneKvBytes: number;
-  /** Occupation physique réelle (réplications comprises) avec une requête. */
+  /** Physical memory usage with one request, including replicas. */
   physicalOneRequestBytes: number;
   fitsOneRequest: boolean;
   fitsWeights: boolean;
@@ -128,7 +128,7 @@ export function supportOf(map: Record<string, Support>, id: string, missing: Sup
   return map[id] ?? { level: missing };
 }
 
-/** Support combiné GPU × moteur : le plus restrictif l'emporte, les notes sont cumulées. */
+/** Combined GPU/engine support: use the most restrictive level and combine notes. */
 export function combinedSupport(gpuMap: Record<string, Support>, engineMap: Record<string, Support>, id: string, engineName: string): Support {
   const g = supportOf(gpuMap, id);
   const e = supportOf(engineMap, id);
@@ -143,13 +143,13 @@ export const weightSupport = (gpu: GpuSpec, engine: EngineSpec, id: string) =>
 export const kvSupport = (gpu: GpuSpec, engine: EngineSpec, id: string) =>
   combinedSupport(gpu.kvCacheFormats, engine.kvCacheFormats, id, engine.name);
 
-/** Format réellement occupé en mémoire GPU pour un fichier de poids donné. */
+/** Actual GPU memory format for a given weight file. */
 export function memoryFormatFor(formats: WeightFormat[], gpu: GpuSpec, engine: EngineSpec, file: WeightFormat): WeightFormat {
   const id = weightSupport(gpu, engine, file.id).memoryFormat;
   return (id && formats.find((f) => f.id === id)) || file;
 }
 
-/** L'économie de VRAM des fenêtres glissantes n'est appliquée que si le moteur libère les blocs hors fenêtre. */
+/** Apply sliding-window VRAM savings only if the engine frees blocks outside the window. */
 export const slidingWindowSaves = (e: EngineSpec) => e.features.slidingWindowAttention === true && e.features.slidingWindowFreesBlocks === true;
 
 export function embeddingParams(m: ModelSpec): number {
@@ -160,7 +160,7 @@ export function effectiveBits(m: ModelSpec, f: WeightFormat): number {
   return f.id === m.nativeWeightFormat && m.nativeBitsPerParam ? m.nativeBitsPerParam : f.bitsPerParam;
 }
 
-/** Les embeddings / lm_head (et l'encodeur vision) restent en 16 bits quand on quantifie. */
+/** Embeddings / lm_head (and the vision encoder) stay at 16 bits when quantizing. */
 export function weightBytes(m: ModelSpec, f: WeightFormat) {
   const bits = effectiveBits(m, f);
   const total = m.paramsB * 1e9;
@@ -173,12 +173,12 @@ export function isMoE(m: ModelSpec): boolean {
   return m.activeParamsB !== undefined && m.activeParamsB < m.paramsB * 0.8;
 }
 
-/** Couches portant un cache. */
+/** Cache-bearing layers. */
 export function totalLayers(m: ModelSpec): number {
   return m.layers.reduce((a, g) => a + g.count, 0);
 }
 
-/** Couches du décodeur (répartition des poids en PP). */
+/** Decoder layers (used to distribute weights in PP). */
 export function decoderLayers(m: ModelSpec): number {
   return Math.max(m.numLayers ?? 0, totalLayers(m));
 }
@@ -200,13 +200,13 @@ export function windowLabel(window: number): string {
   return window < 1024 ? `${window} tok.` : contextLabel(window);
 }
 
-/** Tokens retenus par une couche à fenêtre glissante, selon le moteur. */
+/** Tokens retained by a sliding-window layer, depending on the engine. */
 export function storedTokens(g: LayerGroup, ctx: number, engine: EngineSpec): number {
   if (g.kind === "sliding" && slidingWindowSaves(engine)) return Math.min(ctx, g.window);
   return ctx;
 }
 
-/** Partage du cache d'un groupe de couches entre GPUs en TP. */
+/** Shard a layer group's cache across GPUs in TP. */
 function tpSharding(g: LayerGroup, tp: number): { perGpu: number; replication: number } {
   if (tp === 1) return { perGpu: 1, replication: 1 };
   switch (g.kind) {
@@ -216,14 +216,14 @@ function tpSharding(g: LayerGroup, tp: number): { perGpu: number; replication: n
       return { perGpu: headsPerGpu / g.kvHeads, replication: (headsPerGpu * tp) / g.kvHeads };
     }
     case "mla":
-      // Le latent MLA n'a pas de dimension "tête" : chaque rang TP garde tout le cache.
+      // The MLA latent has no head dimension: each TP rank keeps the whole cache.
       return { perGpu: 1, replication: tp };
     case "linear":
       return { perGpu: 1 / tp, replication: 1 };
   }
 }
 
-/** Degré de TP compatible avec les têtes du modèle (contraintes vLLM). */
+/** TP degree compatible with the model's heads (vLLM constraints). */
 export function isValidTp(m: ModelSpec, tp: number): boolean {
   if (tp === 1) return true;
   if (m.attentionHeads % tp !== 0) return false;
@@ -236,9 +236,9 @@ export function estimate(input: EstimateInput): Estimate {
   const pp = mode === "dp-ep" ? 1 : Math.max(1, Math.round(n / tp));
   const kvB = kvFormat.bytesPerElement;
 
-  // --- Poids (format effectif en mémoire)
+  // --- Weights (effective memory format)
   const w = weightBytes(m, input.memoryWeightFormat ?? weightFormat);
-  /** Octets de params paramètres : au format choisi s'ils sont quantifiés, en 16 bits sinon. */
+  /** Bytes for params parameters: selected precision when quantized, otherwise 16 bits. */
   const bytesOf = (params: number, quantized: boolean) => (params * (quantized || w.bits >= 16 ? w.bits : 16)) / 8;
   const embBytes = bytesOf(embeddingParams(m), false);
   const L = decoderLayers(m);
@@ -249,8 +249,8 @@ export function estimate(input: EstimateInput): Estimate {
   let dpUnvalidated = false;
   if (mode === "dp-ep" && n > 1) {
     if (m.expertParamsB !== undefined) {
-      // Les experts routés sont répartis ; tout le reste (attention, embeddings, couches denses,
-      // experts partagés, routeur) est présent sur chaque rang, à sa précision réelle.
+      // Shard routed experts; everything else (attention, embeddings, dense layers,
+      // shared experts, router) is stored on each rank at its actual precision.
       const expertBytes = bytesOf(Math.min(m.expertParamsB * 1e9, w.quantized), true);
       nonExpertBytes = w.bytes - expertBytes;
       weightsPerGpu = nonExpertBytes + expertBytes / n;
@@ -261,15 +261,15 @@ export function estimate(input: EstimateInput): Estimate {
     }
     replicatedBytes = nonExpertBytes * (n - 1);
   } else if (pp > 1) {
-    // Couches entières par étage : on dimensionne le rang le plus chargé (ceil(L / pp) couches),
-    // plus les embeddings d'entrée ou de sortie qu'il porte (copie sur les deux bords s'ils sont liés).
+    // Whole layers per stage: size for the most heavily loaded rank (ceil(L / pp) layers),
+    // plus its input or output embeddings (copied at both ends when tied).
     const embSide = m.tiedEmbeddings ? embBytes : embBytes / 2;
     const body = w.bytes - embBytes;
     weightsPerGpu = ((body * layersPerStage) / L + embSide) / tp;
     if (m.tiedEmbeddings) replicatedBytes = embBytes;
   }
 
-  // --- KV par requête
+  // --- KV cache per request
   const groups: GroupBreakdown[] = [];
   const perLayer: { cost: number; group: number }[] = [];
   let perTokenBytes = 0;
@@ -308,15 +308,15 @@ export function estimate(input: EstimateInput): Estimate {
     for (let k = 0; k < g.count; k++) perLayer.push({ cost: (bytes / g.count) * s.perGpu, group: gi });
     groups.push({ kind: g.kind, label: groupLabel(g), count: g.count, detail, bytes, perGpuBytes: 0, replication: s.replication });
   });
-  // Rang le plus chargé : au plus ceil(L / pp) couches, en prenant les plus coûteuses (borne prudente,
-  // l'ordre exact des couches n'étant pas connu).
+  // Most heavily loaded rank: at most ceil(L / pp) layers, choosing the most expensive (conservative bound,
+  // since the exact layer order is unknown).
   perLayer.sort((a, b) => b.cost - a.cost);
   for (const l of perLayer.slice(0, Math.min(layersPerStage, perLayer.length))) groups[l.group].perGpuBytes += l.cost;
   const perRequestBytes = groups.reduce((a, g) => a + g.bytes, 0);
   const perRequestPerGpuBytes = groups.reduce((a, g) => a + g.perGpuBytes, 0);
   const perRequestClusterBytes = mode === "dp-ep" || n === 1 ? perRequestBytes : groups.reduce((a, g) => a + g.bytes * g.replication, 0);
 
-  // --- Mémoire
+  // --- Memory
   const gpuBytes = (input.memoryGiBOverride ?? gpu.memoryGiB) * GIB;
   const reservePerGpuBytes = gpuBytes * (input.reservePct / 100);
   const usablePerGpuBytes = gpuBytes - reservePerGpuBytes;
@@ -326,7 +326,7 @@ export function estimate(input: EstimateInput): Estimate {
   const sessionsPerGpu = perRequestPerGpuBytes > 0 ? Math.floor(freeForKvPerGpuBytes / perRequestPerGpuBytes) : 0;
   const sessions = mode === "dp-ep" ? sessionsPerGpu * n : sessionsPerGpu;
 
-  // --- Offload CPU
+  // --- CPU offload
   const offloadTotal = engine.features.kvOffload !== false ? (input.offloadGiBPerGpu ?? 0) * GIB * n : 0;
   const parkedSessions = perRequestClusterBytes > 0 ? Math.floor(offloadTotal / perRequestClusterBytes) : 0;
   const reloadMs = (perRequestPerGpuBytes / (gpu.hostLinkGBs * 1e9)) * 1000;
@@ -375,13 +375,13 @@ export const supportLevelLabel = (l: SupportLevel) => LEVEL_FR[l];
 const gibText = (b: number) =>
   b >= GIB ? `${(b / GIB).toFixed(1).replace(".", ",")} Gio` : `${Math.round(b / 1024 ** 2)} Mio`;
 
-/** Liste des limitations / avertissements pour une configuration. */
+/** List limitations and warnings for a configuration. */
 export function collectIssues(input: EstimateInput, est: Estimate, weightFormats: WeightFormat[]): Issue[] {
   const { model: m, gpu, engine, gpuCount: n, contextTokens: ctx, weightFormat: wf, kvFormat: kf, mode } = input;
   const { tp, pp } = est;
   const out: Issue[] = [];
 
-  // --- Capacité
+  // --- Capacity
   if (!est.fitsWeights) {
     out.push({
       severity: "error",
@@ -396,7 +396,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
     });
   }
 
-  // --- Moteur
+  // --- Engine
   const eg = engine.gpus[gpu.id];
   if (eg && eg.level !== "native")
     out.push({
@@ -420,7 +420,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
   if (fe.kvPoolPreallocated === "unverified")
     out.push({ severity: "info", title: `Préallocation du pool KV non vérifiée dans ${engine.name}`, detail: "Si le pool est dimensionné autrement que par la réserve choisie, la capacité réelle diffère." });
 
-  // --- Formats vs GPU et moteur
+  // --- Formats vs GPU and engine
   const ws = weightSupport(gpu, engine, wf.id);
   if (ws.level !== "native")
     out.push({ severity: ws.level === "unsupported" ? "error" : "warning", title: `Poids ${wf.label} : ${LEVEL_FR[ws.level]}`, detail: ws.note });
@@ -444,13 +444,13 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
     out.push({ severity: ks.level === "unsupported" ? "error" : "warning", title: `KV cache ${kf.label} : ${LEVEL_FR[ks.level]}`, detail: ks.note });
   else if (ks.note) out.push({ severity: "info", title: `KV cache ${kf.label}`, detail: ks.note });
 
-  // --- Formats vs modèle
+  // --- Formats vs model
   const native = m.nativeWeightFormat;
   const wNote = m.weightFormatNotes[wf.id];
   if (wNote) out.push({ severity: wNote.level === "unsupported" ? "error" : wNote.level, title: `${m.name} en ${wf.label}`, detail: wNote.note });
   const nativeFmt = weightFormats.find((f) => f.id === native);
   const nativeFmtBits = nativeFmt ? effectiveBits(m, nativeFmt) : undefined;
-  // Même largeur (ex. BF16 → FP16) : simple conversion, pas de quantification.
+  // Same width (e.g. BF16 to FP16): conversion only, without quantization.
   if (wf.id !== native && nativeFmtBits !== wf.bitsPerParam) {
     if (nativeFmtBits !== undefined && wf.bitsPerParam > nativeFmtBits)
       out.push({
@@ -468,7 +468,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
   const kNote = m.kvFormatNotes[kf.id];
   if (kNote) out.push({ severity: kNote.level === "unsupported" ? "error" : kNote.level, title: `KV ${kf.label} avec ${m.name}`, detail: kNote.note });
 
-  // --- Contexte
+  // --- Context
   if (ctx > m.maxContext) {
     if (m.maxContextExtended && ctx <= m.maxContextExtended)
       out.push({
@@ -520,7 +520,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
   if (m.layers.some((g) => (g.kind === "mla" || g.kind === "full") && (g.extraBytesPerToken ?? 0) > 0))
     out.push({ severity: "info", title: "Index d'attention parcimonieuse (DSA) inclus", detail: "Clés de l'indexeur stockées en FP8 + échelle, en plus du latent." });
 
-  // --- Interconnexion
+  // --- Interconnect
   const linkName = (k: number) => (gpu.interconnect.nvlink && k <= gpu.nvlinkDomain ? "NVLink" : k <= gpu.maxGpusPerNode ? gpu.interconnect.label : "le réseau inter-nœuds");
   if (n > 1) {
     if (mode === "tp-pp" && tp > 1 && !gpu.interconnect.nvlink)
@@ -545,7 +545,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       });
   }
 
-  // --- Parallélisme
+  // --- Parallelism
   if (n > 1 && mode === "tp-pp") {
     const cap = (k: "tensorParallel" | "pipelineParallel", used: boolean, label: string) => {
       const v = engine.features[k];
@@ -637,7 +637,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
     out.push({
       severity: m.confidence === "low" ? "warning" : "info",
       title: `Architecture de ${m.name} à vérifier (fiabilité ${m.confidence === "low" ? "faible" : "moyenne"})`,
-      detail: `Comparez avec le config.json${m.source ? ` de ${m.source}` : ""} (npm run import-model) et corrigez le fichier de configuration si besoin.`,
+      detail: `Comparez avec le config.json${m.source ? ` de ${m.source}` : ""} (pnpm run import-model) et corrigez le fichier de configuration si besoin.`,
     });
 
   const order: Record<Severity, number> = { error: 0, warning: 1, info: 2 };

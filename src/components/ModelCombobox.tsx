@@ -14,7 +14,7 @@ export const TAG_LABELS: Record<string, string> = {
   swa: "SWA",
 };
 
-/** Résumé d'architecture affiché sous forme de badge. */
+/** Architecture summary displayed as a badge. */
 export function archLabel(m: ModelSpec): string {
   const kinds = new Set(m.layers.map((g) => g.kind));
   if (kinds.has("linear")) return kinds.has("mla") ? "Linéaire + MLA" : "Linéaire + GQA";

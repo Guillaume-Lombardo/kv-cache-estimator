@@ -38,7 +38,7 @@ export function ComparePanel({
     const issues = collectIssues(input, est, config.weightFormats);
     return { c, input, est, perf, errors: issues.filter((i) => i.severity === "error").length, warnings: issues.filter((i) => i.severity === "warning").length };
   });
-  // Seules les configurations sans erreur bloquante peuvent être désignées comme meilleures.
+  // Only configurations without blocking errors can be ranked as best.
   const best = Math.max(0, ...data.filter((d) => d.est && !d.errors).map((d) => d.est!.sessions));
 
   const rows: { label: string; cell: (d: (typeof data)[number]) => React.ReactNode }[] = [

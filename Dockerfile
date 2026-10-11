@@ -1,14 +1,15 @@
-# Image de production (sortie "standalone" de Next.js).
-# Le fichier de configuration est lu au démarrage : montez le vôtre et pointez KV_ESTIMATOR_CONFIG dessus.
+# Production image using Next.js standalone output.
+# Configuration is read at startup. Mount a custom file and set KV_ESTIMATOR_CONFIG to its path.
 #   docker build -t kv-cache-estimator .
-#   docker run -p 3000:3000 -v $PWD/mon-catalogue.yaml:/config/estimator.yaml \
+#   docker run -p 3000:3000 -v $PWD/my-catalogue.yaml:/config/estimator.yaml \
 #     -e KV_ESTIMATOR_CONFIG=/config/estimator.yaml kv-cache-estimator
 FROM node:22-alpine AS build
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
 COPY . .
-RUN npm run check-config && npm run build
+RUN pnpm run check-config && pnpm run build
 
 FROM node:22-alpine
 WORKDIR /app

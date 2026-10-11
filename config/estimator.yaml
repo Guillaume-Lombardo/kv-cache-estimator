@@ -1,15 +1,15 @@
 # =============================================================================
-# Configuration de l'estimateur KV cache
+# KV cache estimator configuration
 # -----------------------------------------------------------------------------
-# Lu au démarrage du serveur (relu à chaque requête en mode dev).
-# Chemin alternatif : KV_ESTIMATOR_CONFIG=/chemin/vers/fichier.yaml (ou .json)
-# Vérification      : npm run check-config
-# Ajout d'un modèle : npm run import-model -- chemin/config.json  (voir README)
+# Read at server startup (read again on every request in development).
+# Alternative path: KV_ESTIMATOR_CONFIG=/path/to/file.yaml (or .json)
+# Validation: pnpm run check-config
+# Add a model: pnpm run import-model path/config.json (see README)
 #
-# Unités :
-#   - memoryGiB : mémoire visible par le driver (nvidia-smi), en Gio (2^30 octets)
-#   - paramsB   : milliards de paramètres
-#   - support   : native | limited | unsupported, ou { level, note }
+# Units:
+#   - memoryGiB: driver-visible memory (nvidia-smi), in GiB (2^30 bytes)
+#   - paramsB: billions of parameters
+#   - support: native | limited | unverified | unsupported, or { level, note, memoryFormat? }
 # =============================================================================
 
 defaults:
@@ -21,18 +21,18 @@ defaults:
   kvCacheFormat: bf16
   reservePct: 10 # ≈ vLLM --gpu-memory-utilization 0.90
 
-# Hypothèses de l'estimation de débit (décodage limité par la bande passante mémoire).
+# Throughput estimation assumptions (memory-bandwidth-bound decoding).
 performance:
-  memoryEfficiency: 0.7 # part de la bande passante HBM atteinte
+  memoryEfficiency: 0.7 # fraction of HBM bandwidth reached
   computeEfficiency: 0.45 # MFU
-  collectiveLatencyUs: { nvlink: 8, pcie: 30, network: 40 } # par all-reduce / all-to-all
+  collectiveLatencyUs: { nvlink: 8, pcie: 30, network: 40 } # per all-reduce / all-to-all
 
-# Nombres de GPUs proposés au-delà de 8 (72 seulement pour les domaines NVL72).
+# GPU counts offered above 8 (72 only for NVL72 domains).
 largeGpuCounts: [16, 32, 64, 72]
 
 # -----------------------------------------------------------------------------
-# Formats de poids — bits effectifs, échelles de quantification incluses.
-# Les embeddings / lm_head restent en 16 bits quand on quantifie.
+# Weight formats: effective bits, including quantization scales.
+# Embeddings / lm_head stay at 16 bits when quantizing.
 # -----------------------------------------------------------------------------
 weightFormats:
   - { id: bf16, label: BF16, bitsPerParam: 16, compute: bf16, description: Format d'entraînement standard. }
@@ -44,7 +44,7 @@ weightFormats:
   - { id: nvfp4, label: NVFP4, bitsPerParam: 4.5, compute: fp4, description: "FP4 E2M1, échelle FP8 par bloc de 16 (NVIDIA)." }
 
 # -----------------------------------------------------------------------------
-# Formats du KV cache
+# KV cache formats
 # -----------------------------------------------------------------------------
 kvCacheFormats:
   - { id: bf16, label: BF16, bytesPerElement: 2 }
@@ -53,7 +53,7 @@ kvCacheFormats:
   - { id: nvfp4, label: NVFP4, bytesPerElement: 0.5625, description: 4 bits + échelle FP8 par bloc de 16. Blackwell uniquement. }
 
 # -----------------------------------------------------------------------------
-# Moteurs d'inférence — un format doit être supporté par le GPU ET par le moteur.
+# Inference engines: both the GPU AND the engine must support a format.
 # -----------------------------------------------------------------------------
 engines:
   - id: vllm
@@ -104,17 +104,17 @@ engines:
       dpAttention: --data-parallel-size N --enable-expert-parallel
       kvOffload: "--kv-offloading-size <Gio> (connecteur natif) ou LMCache"
 
-  # Règle du profil :
-  #   - capacités serveur (pagination, batching, prefix caching, TP) : documentation LLMD ;
-  #   - formats, précision du KV, fenêtres glissantes : code de la bibliothèque ZML @3500e88 (9 oct. 2026),
-  #     backend CUDA. Implémenté et branché → oui ; présent mais non branché ou sans source → non vérifié ;
-  #     TODO ou panic explicite → non. Le code de LLMD lui-même n'est pas public.
+  # Profile sourcing rules:
+  #   - server capabilities (paging, batching, prefix caching, TP): LLMD documentation;
+  #   - formats, KV precision, sliding windows: ZML library code @3500e88 (October 9, 2026),
+  #     CUDA backend. Implemented and connected: yes; present but unused or unsourced: unverified;
+  #     explicit TODO or panic: no. LLMD's own source code is not public.
   - id: zml
     name: ZML / LLMD
     description: "Serveur LLMD de ZML, sur la bibliothèque github.com/zml/zml (OpenXLA/PJRT). Capacités serveur selon la doc LLMD, formats selon le code de la bibliothèque."
     version: LLMD (page zml.ai/llmd, oct. 2026) + bibliothèque ZML @3500e88
     confidence: medium
-    # Page LLMD : « A self-contained inference server for LLaMa, Gemma, Qwen and Mistral models ».
+    # LLMD page: "A self-contained inference server for LLaMa, Gemma, Qwen and Mistral models".
     modelFamilies: [Meta (Llama), Google (Gemma), Qwen (Alibaba), Mistral AI]
     features:
       kvPaging: true
@@ -167,7 +167,7 @@ engines:
       - "À ne pas confondre avec llm-d (orchestration Kubernetes de vLLM), couvert par le profil vLLM."
 
 # -----------------------------------------------------------------------------
-# GPUs — TFLOPS denses (sans sparsité), approximatifs.
+# GPUs: approximate dense TFLOPS (without sparsity).
 # -----------------------------------------------------------------------------
 gpus:
   - id: v100
@@ -409,16 +409,16 @@ gpus:
       - "Mémoire visible approximative : vérifiez avec nvidia-smi."
 
 # -----------------------------------------------------------------------------
-# Modèles
+# Models
 # -----------------------------------------------------------------------------
-# layers : groupes de couches qui portent un cache
-#   full    : attention globale GQA/MHA   { count, kvHeads, headDim, headDimV? }
-#   sliding : fenêtre glissante / chunk   { count, kvHeads, headDim, headDimV?, window }
+# layers: groups of cache-bearing layers
+#   full    : global GQA/MHA attention   { count, kvHeads, headDim, headDimV? }
+#   sliding : sliding window / chunk   { count, kvHeads, headDim, headDimV?, window }
 #   mla     : Multi-head Latent Attention { count, kvLoraRank, ropeHeadDim, extraBytesPerToken? }
-#   linear  : Mamba / DeltaNet / KDA      { count, ssmElements, convElements }  (état constant)
-# Les couches sans cache (MLP seules, MTP) ne sont pas listées.
-# revision : révision Hugging Face du config.json vérifié (copie dans config/upstream/).
-# checkpoints : dépôt officiel par format quantifié (utilisé par la commande de lancement).
+#   linear  : Mamba / DeltaNet / KDA      { count, ssmElements, convElements }  (constant state)
+# Layers without a cache (MLP-only, MTP) are omitted.
+# revision: Hugging Face revision of the verified config.json (snapshot in config/upstream/).
+# checkpoints: official repository per quantized format (used by the launch command).
 # confidence : high | medium | low.
 # -----------------------------------------------------------------------------
 models:
@@ -668,8 +668,8 @@ models:
     vocabSize: 154880
     attentionHeads: 64
     layers:
-      # DeepSeek Sparse Attention : indexeur FP8 (128 dims + échelle FP32) sur les 21 couches "full",
-      # les 57 autres réutilisent l'index (IndexShare).
+      # DeepSeek Sparse Attention: FP8 indexer (128 dimensions + FP32 scale) on the 21 "full" layers;
+      # the other 57 reuse the index (IndexShare).
       - { kind: mla, count: 21, kvLoraRank: 512, ropeHeadDim: 64, extraBytesPerToken: 132 }
       - { kind: mla, count: 57, kvLoraRank: 512, ropeHeadDim: 64 }
     maxContext: 1048576
@@ -694,7 +694,7 @@ models:
     attentionHeads: 64
     layers:
       - { kind: linear, count: 34, ssmElements: 1048576, convElements: 73728, label: KDA (état constant) }
-      # Indexeur DSA avec pooling ×4 des clés (index_kpool) : ~132/4 octets par token.
+      # DSA indexer with 4x key pooling (index_kpool): about 132/4 bytes per token.
       - { kind: mla, count: 11, kvLoraRank: 512, ropeHeadDim: 0, extraBytesPerToken: 33 }
     maxContext: 1048576
     nativeWeightFormat: fp8
@@ -1269,7 +1269,7 @@ models:
     vocabSize: 129280
     attentionHeads: 128
     layers:
-      # DeepSeek Sparse Attention : indexeur FP8 (128 dims + échelle FP32) sur chaque couche.
+      # DeepSeek Sparse Attention: FP8 indexer (128 dimensions + FP32 scale) on every layer.
       - { kind: mla, count: 61, kvLoraRank: 512, ropeHeadDim: 64, extraBytesPerToken: 132 }
     maxContext: 131072
     maxContextExtended: 163840
@@ -1368,7 +1368,7 @@ models:
     extraUnquantizedParamsB: 0.9
     attentionHeads: 40
     layers:
-      # iRoPE : 3 couches sur 4 en attention locale par chunks de 8192 tokens (modélisée comme une fenêtre).
+      # iRoPE: 3 out of 4 layers use local attention in 8192-token chunks (modeled as a window).
       - { kind: sliding, count: 36, kvHeads: 8, headDim: 128, window: 8192 }
       - { kind: full, count: 12, kvHeads: 8, headDim: 128 }
     maxContext: 1048576
