@@ -1021,7 +1021,17 @@
           "url": "https://huggingface.co/zai-org/GLM-5.3-Flash"
         }
       ],
-      "revision": "eb9eb208eb0d988989d07a6a12d0fdeb5f52574a"
+      "revision": "eb9eb208eb0d988989d07a6a12d0fdeb5f52574a",
+      "weightStorage": {
+        "fp8": {
+          "baseBytes": 328250014584,
+          "note": "Somme des tensors FP8, BF16 et FP32 des métadonnées Safetensors archivées. Les autres formats restent des projections ; le surcoût réglable est ajouté à cette base.",
+          "source": {
+            "label": "Métadonnées du checkpoint",
+            "url": "https://huggingface.co/api/models/zai-org/GLM-5.3-Flash/revision/eb9eb208eb0d988989d07a6a12d0fdeb5f52574a"
+          }
+        }
+      }
     },
     {
       "id": "zai-org/GLM-4.7",
@@ -1127,7 +1137,17 @@
           "url": "https://huggingface.co/zai-org/GLM-5.3"
         }
       ],
-      "revision": "aca966e4e02791568aa6a4ced368624b3d897f42"
+      "revision": "aca966e4e02791568aa6a4ced368624b3d897f42",
+      "weightStorage": {
+        "fp8": {
+          "baseBytes": 755433728000,
+          "note": "Somme des tensors FP8, BF16 et FP32 des métadonnées Safetensors archivées. Les autres formats restent des projections ; le surcoût réglable est ajouté à cette base.",
+          "source": {
+            "label": "Métadonnées du checkpoint",
+            "url": "https://huggingface.co/api/models/zai-org/GLM-5.3/revision/aca966e4e02791568aa6a4ced368624b3d897f42"
+          }
+        }
+      }
     },
     {
       "id": "google/gemma-4-26B-A4B",
@@ -1294,7 +1314,17 @@
           "url": "https://huggingface.co/moonshotai/Kimi-K2-Instruct"
         }
       ],
-      "revision": "fd1984e2b7a3350dbf7305fe73a4ede25c14de50"
+      "revision": "fd1984e2b7a3350dbf7305fe73a4ede25c14de50",
+      "weightStorage": {
+        "fp8": {
+          "baseBytes": 1028923275952,
+          "note": "Somme des tensors FP8, BF16 et FP32 des métadonnées Safetensors archivées. Les autres formats restent des projections ; le surcoût réglable est ajouté à cette base.",
+          "source": {
+            "label": "Métadonnées du checkpoint",
+            "url": "https://huggingface.co/api/models/moonshotai/Kimi-K2-Instruct/revision/fd1984e2b7a3350dbf7305fe73a4ede25c14de50"
+          }
+        }
+      }
     },
     {
       "id": "moonshotai/Kimi-K2.5",
@@ -1625,7 +1655,17 @@
           "url": "https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512"
         }
       ],
-      "revision": "5b26027e7b19eeb4b7352e1fed3926375dd2cb4d"
+      "revision": "5b26027e7b19eeb4b7352e1fed3926375dd2cb4d",
+      "weightStorage": {
+        "fp8": {
+          "baseBytes": 10420523008,
+          "note": "Somme des tensors FP8, BF16 et FP32 des métadonnées Safetensors archivées. Les autres formats restent des projections ; le surcoût réglable est ajouté à cette base.",
+          "source": {
+            "label": "Métadonnées du checkpoint",
+            "url": "https://huggingface.co/api/models/mistralai/Ministral-3-8B-Instruct-2512/revision/5b26027e7b19eeb4b7352e1fed3926375dd2cb4d"
+          }
+        }
+      }
     },
     {
       "id": "mistralai/Devstral-Small-2-24B-Instruct-2512",
@@ -1675,7 +1715,17 @@
           "url": "https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512"
         }
       ],
-      "revision": "55c5b41e98c2dbd21b0c8afffc540dcfc9eb5128"
+      "revision": "55c5b41e98c2dbd21b0c8afffc540dcfc9eb5128",
+      "weightStorage": {
+        "fp8": {
+          "baseBytes": 25792911360,
+          "note": "Somme des tensors FP8, BF16 et FP32 des métadonnées Safetensors archivées. Les autres formats restent des projections ; le surcoût réglable est ajouté à cette base.",
+          "source": {
+            "label": "Métadonnées du checkpoint",
+            "url": "https://huggingface.co/api/models/mistralai/Devstral-Small-2-24B-Instruct-2512/revision/55c5b41e98c2dbd21b0c8afffc540dcfc9eb5128"
+          }
+        }
+      }
     },
     {
       "id": "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
@@ -1775,7 +1825,17 @@
           "url": "https://huggingface.co/mistralai/Mistral-Medium-3.5-128B"
         }
       ],
-      "revision": "22b2b868a15677cfa6061277ed2f653d1349a9ab"
+      "revision": "22b2b868a15677cfa6061277ed2f653d1349a9ab",
+      "weightStorage": {
+        "fp8": {
+          "baseBytes": 133605832192,
+          "note": "Somme des tensors FP8, BF16 et FP32 des métadonnées Safetensors archivées. Les autres formats restent des projections ; le surcoût réglable est ajouté à cette base.",
+          "source": {
+            "label": "Métadonnées du checkpoint",
+            "url": "https://huggingface.co/api/models/mistralai/Mistral-Medium-3.5-128B/revision/22b2b868a15677cfa6061277ed2f653d1349a9ab"
+          }
+        }
+      }
     },
     {
       "id": "mistralai/Mistral-Large-3-675B-Instruct-2512",

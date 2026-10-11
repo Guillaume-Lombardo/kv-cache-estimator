@@ -16,11 +16,20 @@ const block = z.discriminatedUnion('kind', [
 const model = z.strictObject({
   id: z.string().min(1), name: z.string().min(1), family: z.string().min(1), architecture: z.string().min(1),
   parameters: pos, parameterNote: z.string().min(1), activeParameters: pos.optional(), maxContext: integer,
+  weightStorage: z.partialRecord(weightId, z.strictObject({ baseBytes: pos, note: z.string().min(1), source })).optional(),
   queryHeads: integer, status: z.enum(['estimated', 'experimental', 'unavailable']),
   unavailableReason: z.string().optional(), blocks: z.array(block),
   weightFormats: z.array(weightId).min(1), kvFormats: z.array(kvId).min(1),
   notes: z.array(z.string()), sources: z.array(source).min(1), revision: z.string(),
 }).superRefine((m, ctx) => {
+  if (m.activeParameters !== undefined && m.activeParameters > m.parameters) ctx.addIssue({ code: 'custom', message: 'Les paramètres actifs ne peuvent pas dépasser le total.', path: ['activeParameters'] });
+  m.blocks.forEach((b, index) => {
+    if (b.kind === 'gqa' && m.queryHeads % b.heads !== 0) ctx.addIssue({ code: 'custom', message: 'Le nombre de têtes de requête doit être divisible par le nombre de têtes KV.', path: ['blocks', index, 'heads'] });
+  });
+  for (const format of Object.keys(m.weightStorage || {}) as WeightFormat[]) {
+    if (!m.weightFormats.includes(format)) ctx.addIssue({ code: 'custom', message: 'Stockage renseigné pour un format exclu du modèle.', path: ['weightStorage', format] });
+  }
+
   if (m.status !== 'unavailable' && !m.blocks.length) ctx.addIssue({ code: 'custom', message: 'Un modèle calculable doit définir ses caches.', path: ['blocks'] });
   if (m.status === 'unavailable' && !m.unavailableReason) ctx.addIssue({ code: 'custom', message: 'Motif requis.', path: ['unavailableReason'] });
 });

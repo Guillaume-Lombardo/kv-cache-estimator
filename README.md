@@ -85,11 +85,14 @@ Les capacités nominales exprimées en Go sont converties en Gio. Ce choix conse
 Toutes les tailles sont affichées en Gio, soit 2³⁰ octets.
 
 ```text
-Poids bruts = paramètres totaux × octets par paramètre
-Poids estimés = poids bruts × (1 + surcoût poids)
+Base des poids = stockage mixte du checkpoint si documenté pour ce format
+                sinon paramètres totaux × octets par paramètre
+Poids estimés = base des poids × (1 + surcoût poids)
 Budget caches = max(0, GPU × VRAM/GPU − GPU × réserve/GPU − poids estimés)
 Sessions = floor(budget caches / cache physique d’une session)
 ```
+
+Pour six checkpoints FP8, `weightStorage.fp8.baseBytes` contient la somme des tensors FP8, BF16 et FP32 archivés. Le surcoût réglable est ajouté à cette base, pas utilisé pour remplacer les tensors non quantifiés. Exemple : Mistral Medium 3.5 occupe 124,430 Gio de tensors avant surcoût. Les autres formats restent des projections uniformes si aucun stockage spécifique n’est documenté.
 
 Les poids d’un MoE comprennent tous ses experts. Les paramètres actifs ne suffisent pas à dimensionner la mémoire.
 
@@ -169,7 +172,9 @@ Exemple de blocs pour Mistral Small 3.2 :
 
 Les champs `weightFormats` et `kvFormats` définissent les formats autorisés par le modèle. Chaque GPU contient une entrée `weights` / `kv` pour chaque format, avec `status` (`native`, `conditional`, `unsupported`) et `reason`. Des restrictions propres à une version de moteur peuvent ainsi être imposées dans un catalogue interne sans modifier l’interface.
 
-La validation est stricte : les clés inconnues ou mal orthographiées sont rejetées, y compris dans les objets imbriqués. Elle refuse les clés YAML dupliquées, les identifiants dupliqués, dimensions négatives, champs manquants, URL non HTTPS et modèles calculables sans blocs de cache.
+Le champ optionnel `weightStorage` associe un format à `{ "baseBytes": nombre, "note": "méthode", "source": { "label": "source", "url": "https://…" } }`. Il représente un checkpoint à précisions mixtes sans convertir artificiellement tous ses tensors au format sélectionné.
+
+La validation est stricte : les clés inconnues ou mal orthographiées sont rejetées, y compris dans les objets imbriqués. Elle refuse les clés YAML dupliquées, les identifiants dupliqués, dimensions négatives, champs manquants, URL non HTTPS et modèles calculables sans blocs de cache, rapports de têtes GQA impossibles et nombres de paramètres actifs supérieurs au total.
 
 ## Tests et structure
 
@@ -180,7 +185,7 @@ npm run typecheck
 npm run build
 ```
 
-Les 18 tests vérifient le partage des scénarios et les URL invalides, l’équivalence JSON/YAML, la validation stricte, des résultats numériques connus, les fenêtres glissantes, la réplication TP, le MLA, les états fixes, les limites, les configurations invalides et 9 216 combinaisons modèle/GPU/contexte/nombre de GPU. La compilation de production a été vérifiée. La vérification visuelle et les interactions dans un navigateur restent à réaliser dans un environnement qui le permet.
+Les 21 tests vérifient le partage des scénarios et les URL invalides, l’équivalence JSON/YAML, la validation stricte, des résultats numériques connus, les fenêtres glissantes, la réplication TP, le MLA, les états fixes, les limites, les configurations invalides et 9 216 combinaisons modèle/GPU/contexte/nombre de GPU. La compilation de production a été vérifiée. La vérification visuelle et les interactions dans un navigateur restent à réaliser dans un environnement qui le permet.
 
 ```text
 app/                  Interface et styles
@@ -203,4 +208,4 @@ tests/                Tests du calcul et du schéma
 
 La branche `claude/great-dijkstra-9wcc65` (commit `b6794fe`) a servi de référence pour le sélecteur intégré, le partage par URL, YAML, la validation stricte, l’affichage par GPU et la priorité des avertissements. Ces idées ont été adaptées à notre schéma de configuration et à notre calcul.
 
-Les modes PP et DP-attention de cette branche ne sont pas repris tels quels. Le PP calcule sur une moyenne des couches, qui peut masquer le GPU limitant. Le calcul DP-attention peut omettre des poids d’attention MLA ou linéaire. Un plan de placement explicite est nécessaire pour estimer leur capacité sans surestimation. Le catalogue vérifié de cette PR reste la référence ; les architectures signalées comme non vérifiées dans l’autre branche ne le remplacent pas.
+Les modes PP et DP-attention du snapshot b6794fe ne sont pas repris tels quels. Le PP calcule sur une moyenne des couches, qui peut masquer le GPU limitant. Le calcul DP-attention peut omettre des poids d’attention MLA ou linéaire. Un plan de placement explicite est nécessaire pour estimer leur capacité sans surestimation. Le catalogue vérifié de cette PR reste la référence ; les architectures signalées comme non vérifiées dans l’autre branche ne le remplacent pas.

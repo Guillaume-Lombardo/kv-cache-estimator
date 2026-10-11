@@ -80,3 +80,32 @@ test('all catalogue combinations return finite and nonnegative memory and cohere
     if (r.sessions > 0) { assert.ok(r.weights + r.reserved + r.sessions * r.kvPerSession <= r.total + 1e-9); assert.ok(r.weights + r.reserved + (r.sessions + 1) * r.kvPerSession > r.total); }
   }
 });
+test('native FP8 checkpoints retain BF16/FP32 tensors in memory', () => {
+  const m = catalog.models.find(m => m.id === 'mistralai/Mistral-Medium-3.5-128B')!;
+  const tensors = 5901622016 * 2 + 121802588160;
+  const r = estimate(m, gpu, { ...s, weight: 'fp8', weightOverhead: 2 });
+  assert.equal(r.weightBasis, 'checkpoint');
+  assert.equal(r.rawWeights, tensors / GiB);
+  assert.equal(r.weights, tensors * 1.02 / GiB);
+  assert.ok(r.weights > m.parameters * 1.02 / GiB);
+  assert.equal(estimate(m, gpu, { ...s, weight: 'bf16' }).weights, m.parameters * 2 / GiB);
+});
+test('catalogue FP8 storage agrees with the archived source tensors', () => {
+  const bytes: Record<string, number> = { BF16: 2, F16: 2, F32: 4, F8_E4M3: 1, F8_E4M3FN: 1 };
+  let count = 0;
+  for (const m of catalog.models) {
+    if (!m.weightStorage?.fp8) continue;
+    const source = JSON.parse(readFileSync(`config/upstream/${m.id.replace('/', '__')}.json`, 'utf8'));
+    const expected = Object.entries(source.parameterMetadata.parameters as Record<string, number>).reduce((sum, [dtype, n]) => sum + n * bytes[dtype], 0);
+    assert.equal(m.weightStorage.fp8.baseBytes, expected, m.id); count++;
+  }
+  assert.equal(count, 6);
+});
+test('invalid GQA ratios and active parameter counts are rejected', () => {
+  for (const mutate of [
+    (m: typeof raw.models[number]) => { m.blocks = [{ kind: 'gqa', label: 'Bad', layers: 1, heads: 3, keyDim: 128, valueDim: 128 }]; m.queryHeads = 32; },
+    (m: typeof raw.models[number]) => { m.activeParameters = m.parameters + 1; },
+  ]) {
+    const copy = structuredClone(raw); mutate(copy.models[0]); assert.equal(catalogSchema.safeParse(copy).success, false);
+  }
+});

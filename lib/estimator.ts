@@ -29,7 +29,9 @@ export function estimate(model: Model, gpu: GPU, s: Settings) {
   const count = s.gpuCount;
   const tp = s.parallelism === 'tp';
   const w = WEIGHT_FORMATS[s.weight], kv = KV_FORMATS[s.kv];
-  const rawWeights = model.parameters * w.bytes / GiB;
+  const storage = model.weightStorage?.[s.weight];
+  const rawWeights = (storage?.baseBytes ?? model.parameters * w.bytes) / GiB;
+  if (storage) add('info', `Poids ${s.weight.toUpperCase()} : base du checkpoint à précisions mixtes, puis surcoût de ${s.weightOverhead} %. ${storage.note}`);
   const weights = rawWeights * (1 + s.weightOverhead / 100);
   const total = s.memoryGiB * count;
   const reserved = s.reserveGiB * count;
@@ -81,5 +83,5 @@ export function estimate(model: Model, gpu: GPU, s: Settings) {
   if (memorySessions === 0 && weights <= total - reserved && kvPerSession > 0) add('error', 'Mémoire insuffisante pour une session au contexte choisi.');
   notices.sort((a, b) => ({ error: 0, warning: 1, info: 2 })[a.level] - ({ error: 0, warning: 1, info: 2 })[b.level]);
   const compatible = !notices.some(n => n.level === 'error');
-  return { rawWeights, weights, total, reserved, available, logicalKV, kvPerSession, modelAndKV: weights + kvPerSession, parts, memorySessions, sessions: compatible ? memorySessions : 0, compatible, notices };
+  return { weightBasis: storage ? 'checkpoint' as const : 'uniform' as const, rawWeights, weights, total, reserved, available, logicalKV, kvPerSession, modelAndKV: weights + kvPerSession, parts, memorySessions, sessions: compatible ? memorySessions : 0, compatible, notices };
 }
