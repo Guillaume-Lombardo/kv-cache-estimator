@@ -6,11 +6,12 @@ import { estimatePerf } from "./perf";
 import { defaultTp, gpuCountOptions, maxContextFor, pickKvFormat, pickWeightFormat, sizeForTarget } from "./planning";
 import { launchCommand } from "./scenario";
 import type { AppConfig } from "./config-schema";
+import { localize } from "./i18n";
 
 const load = async (): Promise<AppConfig> => {
   const r = await parseConfigFile(path.join(__dirname, "../../config/estimator.yaml"));
   if (!r.ok) throw new Error(r.error);
-  return r.config;
+  return localize(r.config, "fr");
 };
 
 type Overrides = { model?: string; gpu?: string; wf?: string; kf?: string; engine?: string } & Partial<
@@ -271,7 +272,7 @@ describe("performance", async () => {
     const e = estimate(i);
     const p = estimatePerf(i, e, cfg.performance);
     const expected = (3.35e12 * 0.7) / (e.weights.totalBytes + e.kv.perRequestBytes);
-    expect(p.single.bound).toBe("mémoire");
+    expect(p.single.bound).toBe("memory");
     expect(p.single.tokPerSecPerSession).toBeCloseTo(expected, 5);
     expect(p.full!.tokPerSecTotal).toBeGreaterThan(p.single.tokPerSecTotal);
   });

@@ -2,7 +2,7 @@
 
 A single-page Next.js / TypeScript application for estimating the memory required to serve open-weight LLMs on NVIDIA GPUs: model weights, KV cache per request, concurrent sessions and approximate throughput. It also supports inverse sizing and scenario comparison. The reference engine is vLLM, including deployments orchestrated by llm-d.
 
-The application interface is in French. Repository documentation, Markdown files, source comments and docstrings are written in English.
+The interface is available in French and English, with a light, dark or system theme. The buttons at the top right switch both; the choice is stored in cookies (`kv-lang`, `kv-theme`) so the server renders the right language and theme directly. Without a cookie, the language follows the browser's `Accept-Language` header (French by default). Repository documentation, Markdown files, source comments and docstrings are written in English.
 
 ## Quick start
 
@@ -194,6 +194,14 @@ Example model entry to add under `models` in a complete catalogue:
 
 Layer kinds are `full`, `sliding` (`window`), `mla` (`kvLoraRank`, `ropeHeadDim`, `extraBytesPerToken`) and `linear` (`ssmElements`, `convElements`).
 
+Text shown in the interface (descriptions, notes, support notes, labels, GPU names) accepts either one string for both languages or one string per language:
+
+```yaml
+notes:
+  - Same text in both languages.
+  - { fr: "Licence Mistral Research (usage commercial soumis à accord).", en: "Mistral Research License (commercial use requires an agreement)." }
+```
+
 The catalogue contains 64 models across Mistral, Z.ai (GLM), Moonshot (Kimi), Xiaomi (MiMo), Qwen, NVIDIA, Google (Gemma), DeepSeek, OpenAI (gpt-oss) and Meta (Llama). Entries with a verified configuration revision have upstream snapshots in `config/upstream/`, originally collected on `feat/kv-cache-estimator`. Other entries use public architecture information with a `confidence` level (`high`, `medium`, `low`); the UI marks medium and low confidence. Some active parameter counts, including Kimi K3, GLM-5.3 and MiMo-V2.6-Pro, are estimates.
 
 ## Development checks
@@ -207,4 +215,4 @@ pnpm run build
 
 Tests cover formulas, TP/PP/DP replication, offload, throughput, sizing, the 24 upstream configuration imports and a configuration matrix. GitHub Actions also builds and smoke-tests the production image.
 
-Keep source comments, docstrings and Markdown artifacts in English. Preserve French UI text and catalogue messages unless a change explicitly includes interface translation. Do not edit upstream configuration snapshots to translate external source data.
+Keep source comments, docstrings and Markdown artifacts in English. Write every new UI string and catalogue message in both French and English: `t("…", "…")` from `usePrefs()` in components, `tr(lang)` in `src/lib`, `{ fr, en }` in the configuration. Do not edit upstream configuration snapshots to translate external source data.

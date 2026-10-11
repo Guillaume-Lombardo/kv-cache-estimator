@@ -11,6 +11,7 @@ import {
   type ParallelMode,
 } from "./calc";
 import type { AppConfig, EngineSpec, GpuSpec, ModelSpec } from "./config-schema";
+import { tr } from "./i18n";
 import { estimatePerf } from "./perf";
 
 const usable = (l: string) => l !== "unsupported";
@@ -88,13 +89,14 @@ export function sizeForTarget(
 ): SizingRow[] {
   const rows: SizingRow[] = [];
   const maxCtx = base.model.maxContextExtended ?? base.model.maxContext;
+  const t = tr(base.lang ?? "fr");
   for (const gpu of cfg.gpus) {
     const wfId = pickWeightFormat(cfg, base.model, gpu, base.engine, base.weightFormatId);
     const kfId = pickKvFormat(cfg, gpu, base.engine, base.kvFormatId);
     const weightFormat = cfg.weightFormats.find((f) => f.id === wfId)!;
     const kvFormat = cfg.kvCacheFormats.find((f) => f.id === kfId)!;
     const notes: string[] = [];
-    if (wfId !== base.weightFormatId) notes.push(`poids ${weightFormat.label}`);
+    if (wfId !== base.weightFormatId) notes.push(t(`poids ${weightFormat.label}`, `${weightFormat.label} weights`));
     if (kfId !== base.kvFormatId) notes.push(`KV ${kvFormat.label}`);
 
     let found: SizingRow | null = null;
@@ -116,7 +118,7 @@ export function sizeForTarget(
         const issues = collectIssues(input, est, cfg.weightFormats);
         if (issues.some((i) => i.severity === "error")) continue;
         // Rank configurations using unverified capabilities below verified configurations.
-        const unverified = issues.some((i) => /(non vérifié|non vérifiée)/.test(i.title) && /(parallel|DP-attention)/i.test(i.title));
+        const unverified = issues.some((i) => i.unverifiedParallelism);
         const rate = estimatePerf(input, est, cfg.performance).at(targetSessions).tokPerSecTotal;
         const score = unverified ? rate / 1e6 : rate;
         if (!best || score > best.score) best = { input, sessions: est.sessions, rate, score, unverified };
@@ -131,12 +133,12 @@ export function sizeForTarget(
           weightFormat: wfId,
           kvFormat: kfId,
           tokPerSecTotal: best.rate,
-          note: [...notes, ...(best.unverified ? ["parallélisme non vérifié"] : [])].join(", ") || undefined,
+          note: [...notes, ...(best.unverified ? [t("parallélisme non vérifié", "unverified parallelism")] : [])].join(", ") || undefined,
         };
         break;
       }
     }
-    if (!found && base.contextTokens > maxCtx) notes.push("contexte hors limite du modèle");
+    if (!found && base.contextTokens > maxCtx) notes.push(t("contexte hors limite du modèle", "context beyond the model limit"));
     rows.push(
       found ?? {
         gpu,
@@ -147,7 +149,7 @@ export function sizeForTarget(
         weightFormat: wfId,
         kvFormat: kfId,
         tokPerSecTotal: null,
-        note: [...notes, "objectif inatteignable"].join(", "),
+        note: [...notes, t("objectif inatteignable", "target unreachable")].join(", "),
       },
     );
   }

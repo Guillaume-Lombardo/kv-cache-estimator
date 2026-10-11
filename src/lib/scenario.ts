@@ -1,5 +1,6 @@
 import { CONTEXT_STEPS, isMoE, memoryFormatFor, type EstimateInput, type ParallelMode } from "./calc";
 import type { AppConfig, ModelSpec } from "./config-schema";
+import { tr, type Lang } from "./i18n";
 import { defaultTp, divisors, gpuCountOptions, pickKvFormat, pickWeightFormat } from "./planning";
 
 /** Complete scenario state: URL-serializable and pinnable for comparison. */
@@ -81,7 +82,8 @@ export function scenarioToQuery(s: Scenario): string {
 }
 
 /** Resolve a scenario to calculator input (null if an identifier no longer exists). */
-export function resolveScenario(cfg: AppConfig, models: ModelSpec[], s: Scenario): EstimateInput | null {
+/** Scenario to calculation input; lang sets the language of generated labels and messages. */
+export function resolveScenario(cfg: AppConfig, models: ModelSpec[], s: Scenario, lang?: Lang): EstimateInput | null {
   const model = models.find((m) => m.id === s.modelId);
   const gpu = cfg.gpus.find((g) => g.id === s.gpuId);
   const engine = cfg.engines.find((e) => e.id === s.engineId);
@@ -102,6 +104,7 @@ export function resolveScenario(cfg: AppConfig, models: ModelSpec[], s: Scenario
     reservePct: s.reservePct,
     memoryGiBOverride: s.memGiB,
     offloadGiBPerGpu: s.offloadGiB,
+    lang,
   };
 }
 
@@ -112,11 +115,12 @@ export function resolveScenario(cfg: AppConfig, models: ModelSpec[], s: Scenario
  */
 export function launchCommand(input: EstimateInput, tp: number, pp: number): { text: string; matchesScenario: boolean } | null {
   const { engine, model, gpuCount, mode, kvFormat, reservePct, contextTokens, weightFormat } = input;
+  const t = tr(input.lang ?? "fr");
   const f = engine.flags;
   if (!f.tensorParallel) return null;
   const repo = model.checkpoints[weightFormat.id] ?? (weightFormat.id === model.nativeWeightFormat ? model.source : undefined);
   const native = !!repo;
-  const checkpoint = repo ?? `<checkpoint-${weightFormat.id}-de-${model.id}>`;
+  const checkpoint = repo ?? t(`<checkpoint-${weightFormat.id}-de-${model.id}>`, `<checkpoint-${weightFormat.id}-of-${model.id}>`);
   const parts = [`vllm serve ${checkpoint}`];
   if (mode === "dp-ep" && f.dpAttention) parts.push(f.dpAttention.replace("N", String(gpuCount)));
   else {
@@ -129,6 +133,9 @@ export function launchCommand(input: EstimateInput, tp: number, pp: number): { t
   if (model.ssmStateBytes === 4) parts.push("--mamba-ssm-cache-dtype float32");
   const header = native
     ? ""
-    : `# Le catalogue n'associe aucun checkpoint ${weightFormat.label} à ${model.name} (dépôt de référence : ${model.source ?? "?"}, format ${model.nativeWeightFormat.toUpperCase()}).\n# Remplacez la ligne suivante par un checkpoint ${weightFormat.label} existant et supporté.\n`;
+    : t(
+        `# Le catalogue n'associe aucun checkpoint ${weightFormat.label} à ${model.name} (dépôt de référence : ${model.source ?? "?"}, format ${model.nativeWeightFormat.toUpperCase()}).\n# Remplacez la ligne suivante par un checkpoint ${weightFormat.label} existant et supporté.\n`,
+        `# The catalogue maps no ${weightFormat.label} checkpoint to ${model.name} (reference repository: ${model.source ?? "?"}, ${model.nativeWeightFormat.toUpperCase()} format).\n# Replace the next line with an existing, supported ${weightFormat.label} checkpoint.\n`,
+      );
   return { text: header + parts.join(" \\\n  "), matchesScenario: native };
 }

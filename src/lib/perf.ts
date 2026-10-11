@@ -12,7 +12,7 @@ export interface DecodePoint {
   stepMs: number;
   tokPerSecPerSession: number;
   tokPerSecTotal: number;
-  bound: "mémoire" | "calcul";
+  bound: "memory" | "compute";
 }
 
 export interface PerfEstimate {
@@ -118,7 +118,7 @@ export function estimatePerf(input: EstimateInput, est: Estimate, perf: Performa
       stepMs: stepS * 1000,
       tokPerSecPerSession: 1 / stepS,
       tokPerSecTotal: batch / stepS,
-      bound: memS >= compS ? "mémoire" : "calcul",
+      bound: memS >= compS ? "memory" : "compute",
     };
   };
 

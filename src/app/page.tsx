@@ -1,5 +1,7 @@
 import { Estimator } from "@/components/Estimator";
+import { tr } from "@/lib/i18n";
 import { loadConfig } from "@/lib/load-config";
+import { readPrefs } from "@/lib/prefs-server";
 import type { QueryParams } from "@/lib/scenario";
 
 // Read the configuration on the server at startup (see load-config.ts).
@@ -10,19 +12,20 @@ type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 export default async function Page({ searchParams }: { searchParams: SearchParams }) {
   const result = await loadConfig();
   if (!result.ok) {
+    const t = tr((await readPrefs()).lang);
     return (
       <main className="config-error">
-        <h1>Fichier de configuration invalide</h1>
+        <h1>{t("Fichier de configuration invalide", "Invalid configuration file")}</h1>
         <p>
           <code>{result.path}</code>
         </p>
         <pre>{result.error}</pre>
-        <p>Corrigez le fichier (ou KV_ESTIMATOR_CONFIG) puis relancez l&apos;application.</p>
+        <p>{t("Corrigez le fichier (ou KV_ESTIMATOR_CONFIG) puis relancez l'application.", "Fix the file (or KV_ESTIMATOR_CONFIG), then restart the application.")}</p>
       </main>
     );
   }
 
   const sp = await searchParams;
   const initial: QueryParams = Object.fromEntries(Object.entries(sp).map(([k, v]) => [k, Array.isArray(v) ? v[0] : v]));
-  return <Estimator config={result.config} configPath={result.path} initial={initial} />;
+  return <Estimator source={result.config} configPath={result.path} initial={initial} />;
 }
