@@ -105,12 +105,19 @@ export function resolveScenario(cfg: AppConfig, models: ModelSpec[], s: Scenario
   };
 }
 
-/** Commande de lancement indicative pour les moteurs qui déclarent leurs options. */
-export function launchCommand(input: EstimateInput, tp: number, pp: number): string | null {
-  const { engine, model, gpuCount, mode, kvFormat, reservePct, contextTokens } = input;
+/**
+ * Commande de lancement indicative pour les moteurs qui déclarent leurs options.
+ * Le dépôt du catalogue ne correspond qu'au format natif : pour un autre format, le checkpoint
+ * reste à fournir et la commande le signale au lieu de prétendre reproduire le scénario.
+ */
+export function launchCommand(input: EstimateInput, tp: number, pp: number): { text: string; matchesScenario: boolean } | null {
+  const { engine, model, gpuCount, mode, kvFormat, reservePct, contextTokens, weightFormat } = input;
   const f = engine.flags;
   if (!f.tensorParallel) return null;
-  const parts = [`vllm serve ${model.source ?? model.id}`];
+  const repo = model.checkpoints[weightFormat.id] ?? (weightFormat.id === model.nativeWeightFormat ? model.source : undefined);
+  const native = !!repo;
+  const checkpoint = repo ?? `<checkpoint-${weightFormat.id}-de-${model.id}>`;
+  const parts = [`vllm serve ${checkpoint}`];
   if (mode === "dp-ep" && f.dpAttention) parts.push(f.dpAttention.replace("N", String(gpuCount)));
   else {
     if (tp > 1) parts.push(`${f.tensorParallel} ${tp}`);
@@ -120,5 +127,8 @@ export function launchCommand(input: EstimateInput, tp: number, pp: number): str
   if (f.memoryUtilization) parts.push(`${f.memoryUtilization} ${(1 - reservePct / 100).toFixed(2)}`);
   parts.push(`--max-model-len ${contextTokens}`);
   if (model.ssmStateBytes === 4) parts.push("--mamba-ssm-cache-dtype float32");
-  return parts.join(" \\\n  ");
+  const header = native
+    ? ""
+    : `# Le catalogue n'associe aucun checkpoint ${weightFormat.label} à ${model.name} (dépôt de référence : ${model.source ?? "?"}, format ${model.nativeWeightFormat.toUpperCase()}).\n# Remplacez la ligne suivante par un checkpoint ${weightFormat.label} existant et supporté.\n`;
+  return { text: header + parts.join(" \\\n  "), matchesScenario: native };
 }

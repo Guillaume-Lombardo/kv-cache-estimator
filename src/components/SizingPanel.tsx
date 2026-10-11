@@ -18,10 +18,10 @@ export interface SizingChoice {
 export function SizingPanel({ config, input, onApply }: { config: AppConfig; input: EstimateInput; onApply: (c: SizingChoice) => void }) {
   const [target, setTarget] = useState(32);
   const rows = useMemo(
-    () => sizeForTarget(config, { ...input, weightFormatId: input.weightFormat.id, kvFormatId: input.kvFormat.id }, target),
+    () => sizeForTarget(config, { ...input, weightFormatId: input.weightFormat.id, kvFormatId: input.kvFormat.id }, target, input.gpu.id),
     [config, input, target],
   );
-  const maxCtx = useMemo(() => maxContextFor(input, target), [input, target]);
+  const maxCtx = useMemo(() => maxContextFor(config, input, target), [config, input, target]);
 
   return (
     <div>
@@ -77,7 +77,7 @@ export function SizingPanel({ config, input, onApply }: { config: AppConfig; inp
             contexte maximal pour {fmtInt(target)} sessions = <strong>{contextLabel(maxCtx)}</strong>.
           </>
         ) : (
-          <>objectif inatteignable même à {contextLabel(8192)}.</>
+          <>objectif inatteignable sans erreur, même à {contextLabel(8192)}.</>
         )}
       </p>
     </div>

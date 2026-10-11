@@ -107,7 +107,8 @@ function detectNativeFormat(q: Json | undefined, dtype: unknown): { format: stri
 interface ParamEstimate {
   total: number;
   active: number;
-  attention: number;
+  /** Experts routés (répartis en expert parallel). */
+  routed: number;
   embeddings: number;
 }
 
@@ -160,7 +161,7 @@ function estimateParams(t: Json, groups: LayerGroup[], tied: boolean, linearPara
 
   const total = embeddings + attention + dense + routed + sharedP + router;
   const active = embeddings + attention + dense + moeLayers * topk * perExpert + sharedP + router;
-  return { total, active, attention, embeddings };
+  return { total, active, routed, embeddings };
 }
 
 function parseNominalParams(text: string): number | undefined {
@@ -378,7 +379,8 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
     ...(tied ? { tiedEmbeddings: true } : {}),
     ...(extraUnq > 0.05 ? { extraUnquantizedParamsB: round(extraUnq, 2) } : {}),
     attentionHeads: heads,
-    ...(groups.some((g) => g.kind !== "full" && g.kind !== "sliding") ? { attentionParamsB: round((est.attention / 1e9) * Math.min(1.5, Math.max(0.67, ratio)), 1) } : {}),
+    ...(L > groups.reduce((a, g) => a + g.count, 0) ? { numLayers: L } : {}),
+    ...(experts && est.routed > 0 ? { expertParamsB: round((est.routed / 1e9) * Math.min(1.5, Math.max(0.67, ratio)), 1) } : {}),
     layers: groups,
     maxContext: maxPos,
     nativeWeightFormat: nativeFmt.format,

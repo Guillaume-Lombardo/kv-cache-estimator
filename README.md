@@ -66,7 +66,7 @@ Les paramètres actifs des MoE sont estimés. Le format natif est déduit de `qu
 | Carte | V100, L40S, H100, H200, GH200 (96 / 144 Go), B200, GB200, B300, GB300 |
 | Nombre de cartes | 1 à 8, puis 16, 32, 64 (et 72 en NVL72) |
 | Parallélisme | TP / PP avec choix du degré de TP (PP = cartes ÷ TP), ou DP-attention + EP pour les MoE |
-| Moteur | vLLM / llm-d, ZML (llmd) : un format doit être supporté par la carte **et** par le moteur |
+| Moteur | vLLM / llm-d, ZML / LLMD : un format doit être supporté par la carte **et** par le moteur |
 | Formats | poids BF16, FP16, FP8, INT8, INT4, MXFP4, NVFP4 ; KV BF16, FP16, FP8, NVFP4 |
 | Réserve | % de chaque GPU laissé aux activations et graphes CUDA (≈ `--gpu-memory-utilization`) |
 | Options avancées | mémoire visible par GPU (valeur `nvidia-smi`), offload du KV en RAM CPU |
@@ -92,6 +92,25 @@ L'état complet est dans l'URL, il suffit de copier le lien pour partager une co
 - **Ajustement automatique (🔁)** : quand on change de carte, de moteur ou de modèle et que le choix n'est plus possible, l'app bascule sur le meilleur choix et le signale. Elle revient au format natif dès qu'il redevient disponible.
 - **Panneau d'avertissements** classé par gravité (⛔ / ⚠️ / ℹ️).
 
+## Profils moteur
+
+Chaque moteur déclare, avec une note et une source pour chaque point :
+
+- **Formats** : niveau de support pour chaque format de poids et de KV (natif, limité, **non vérifié**, non supporté). Un format « non vérifié » reste sélectionnable mais il est signalé.
+- **Format en mémoire** : `memoryFormat` indique si le moteur garde le format du fichier ou s'il le déquantifie au chargement (ex. fichier FP8 → BF16 en VRAM). La VRAM est calculée sur le format en mémoire. Si ce point n'est pas vérifié, le calcul garde le format du fichier et l'avertissement donne aussi la taille en BF16.
+- **Capacités à trois états** (oui / non / non vérifié) : KV paginé, pool KV préalloué (les deux peuvent coexister), prefix caching, continuous batching, attention glissante, libération des blocs hors fenêtre, TP, PP, DP-attention, offload.
+- **Fenêtres glissantes** : l'économie de VRAM n'est appliquée que si le moteur supporte l'attention glissante **et** libère effectivement les blocs hors fenêtre. Sans support de l'attention glissante, c'est une erreur (résultats faux). Si la libération n'est pas confirmée, le contexte complet est compté.
+
+**ZML / LLMD** (et non llm-d) :
+
+- **Capacités serveur**, d'après la [documentation LLMD](https://zml.ai/llmd/) : PagedAttention, continuous batching, tensor parallel, prefix caching.
+- **Formats, précision du KV et fenêtres glissantes**, d'après le code de la [bibliothèque ZML @3500e88](https://github.com/zml/zml/tree/3500e88cf84e0e98d37b0f6048e6af9d33bc6108) (9 octobre 2026), backend CUDA, car le code de LLMD n'est pas public :
+  - poids FP8 / MXFP4 / NVFP4 : présents et gardés quantifiés en mémoire, mais leur chargement par LLMD n'est pas vérifié ;
+  - INT4 / INT8 : non implémentés (TODO dans `zml/nn.zig`) ;
+  - KV FP8 : refusé par FA2/FA3, désactivé dans le wrapper Triton ;
+  - fenêtre glissante : appliquée par les noyaux, mais aucune libération de pages dans la bibliothèque. Aucune économie de VRAM n'est donc appliquée.
+- Le profil indique ce qui reste à vérifier (pool préalloué, PP, DP-attention, offload).
+
 ## Modèle de calcul
 
 - **Poids** = paramètres × bits effectifs (échelles incluses : INT4 g128 = 4,25 bits, NVFP4 = 4,5 bits…). Embeddings, lm_head et encodeur vision restent en 16 bits si on quantifie. `nativeBitsPerParam` corrige les checkpoints natifs particuliers (Kimi K2.5 en INT4 g32 = 4,5 bits).
@@ -99,8 +118,13 @@ L'état complet est dans l'URL, il suffit de copier le lien pour partager une co
 - **Fenêtre glissante** : plafonnée à la fenêtre si le moteur le gère (`slidingWindowOptimized`), sinon contexte complet.
 - **MLA** : couches × (rang latent + dim RoPE) × octets × tokens ; indexeur DSA en FP8 (+ échelle) en plus.
 - **Linéaire / SSM** : état SSM (`ssmStateBytes`, FP32 si imposé) + état de convolution, constant par requête.
-- **TP** : têtes KV réparties, répliquées si TP > têtes KV ; latent MLA copié sur chaque rang TP. **PP** : couches réparties, sans duplication. **DP-attention + EP** : attention répliquée sur chaque GPU, experts répartis, chaque requête sur un seul GPU.
-- **Sessions** = ⌊(mémoire GPU × (1 − réserve) − poids par GPU) ÷ KV par requête et par GPU⌋, au contexte maximal (pire cas). Prefix caching ignoré.
+- **TP** : têtes KV réparties, répliquées si TP > têtes KV ; latent MLA copié sur chaque rang TP.
+- **PP** : couches entières par étage. On dimensionne le rang le plus chargé : ⌈couches ÷ PP⌉ couches, en prenant les plus coûteuses en KV puisque l'ordre exact n'est pas connu. Ce rang porte aussi les embeddings d'entrée ou de sortie (copiés sur les deux bords s'ils sont liés). PP supérieur au nombre de couches = erreur.
+- **DP-attention + EP** : seuls les experts routés (`expertParamsB`) sont répartis. Attention, embeddings, couches denses et experts partagés sont présents sur chaque GPU, à leur précision réelle (BF16 pour les tensors non quantifiés). Sans `expertParamsB`, la capacité n'est pas validée (erreur). Chaque requête vit sur un seul GPU.
+- **Sessions** = ⌊(mémoire GPU × (1 − réserve) − poids du GPU le plus chargé) ÷ KV par requête de ce GPU⌋, au contexte maximal (pire cas). Prefix caching ignoré.
+- **Modèle + 1 KV** : occupation physique réelle (réplications du KV en TP, poids répliqués en DP-attention ou en PP). La somme logique est affichée à côté si elle diffère. Le verdict « tient » porte sur le GPU le plus chargé.
+- **Recommandations** (dimensionnement, contexte maximal, meilleure colonne de la comparaison) : seules les configurations sans erreur bloquante sont retenues (formats, parallélisme, contexte du modèle, capacité). La mémoire visible personnalisée ne s'applique qu'à la carte pour laquelle elle a été saisie.
+- **Commande indicative** : elle utilise le dépôt du format natif ou celui déclaré dans `checkpoints`. Sinon, le checkpoint reste à fournir et la commande le signale.
 - **Offload CPU** : sessions supplémentaires gardées en RAM (en attente, préemptées, prefix cache). Elles n'augmentent pas la concurrence de décodage. Temps de rechargement = KV par GPU ÷ lien CPU↔GPU.
 - **Débit** : temps d'une étape = max(octets lus ÷ (bande passante × efficacité), FLOPs ÷ (TFLOPS × MFU)) + latence des collectives. Pour un MoE, les octets lus incluent les experts touchés par le batch, plus le KV des sessions actives. En PP, l'étape traverse les étages. Le prefill est calculé en FLOPs (attention causale incluse). Réglages dans `performance:` du YAML.
 
@@ -158,7 +182,6 @@ Types de couches : `full`, `sliding` (`window`), `mla` (`kvLoraRank`, `ropeHeadD
 - Les modèles marqués **« config vérifiée »** (champ `revision`) ont été vérifiés contre leur `config.json` d'origine. Les copies sont dans `config/upstream/`, reprises de la branche `feat/kv-cache-estimator`.
 - Les autres viennent de connaissances publiques. Le champ `confidence` (`high`, `medium`, `low`) l'indique, et l'interface affiche un badge pour les deux derniers niveaux.
 - Les paramètres actifs de certains modèles récents (Kimi K3, GLM-5.3, MiMo-V2.6-Pro) sont estimés.
-- Le profil **ZML (llmd)** est indicatif et doit être complété.
 
 ## Tests
 

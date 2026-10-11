@@ -69,13 +69,21 @@ export interface Estimate {
   pp: number;
   weights: {
     bitsPerParam: number;
+    /** Poids du modèle (une copie). */
     totalBytes: number;
+    /** Poids sur le GPU le plus chargé. */
     perGpuBytes: number;
     quantizedParams: number;
     unquantizedParams: number;
-    attentionBytes: number;
-    replicatedAttentionBytes: number;
+    /** DP-attention : tensors non experts présents sur chaque GPU. */
+    nonExpertBytes: number;
+    /** Copies supplémentaires de poids (DP-attention, embeddings liés en PP). */
+    replicatedBytes: number;
+    /** DP-attention sans nombre de paramètres des experts : capacité non validée. */
+    dpUnvalidated: boolean;
   };
+  /** Couches par étage PP sur le rang le plus chargé. */
+  layersPerStage: number;
   kv: {
     /** KV d'une requête, vue logique. */
     perRequestBytes: number;
@@ -101,7 +109,10 @@ export interface Estimate {
     /** Temps de rechargement d'une session complète vers le GPU, ms. */
     reloadMs: number;
   };
+  /** Somme logique poids + une requête (sans réplication). */
   modelPlusOneKvBytes: number;
+  /** Occupation physique réelle (réplications comprises) avec une requête. */
+  physicalOneRequestBytes: number;
   fitsOneRequest: boolean;
   fitsWeights: boolean;
   sessions: number;
@@ -155,27 +166,18 @@ export function weightBytes(m: ModelSpec, f: WeightFormat) {
   return { bytes: ((total - keep) * bits) / 8 + keep * 2, quantized: total - keep, unquantized: keep, bits };
 }
 
-/** Paramètres d'attention (Q, K, V, O) : valeur du fichier ou estimation à partir des couches GQA. */
-export function attentionParams(m: ModelSpec): number {
-  if (m.attentionParamsB !== undefined) return m.attentionParamsB * 1e9;
-  let p = 0;
-  for (const g of m.layers) {
-    if (g.kind !== "full" && g.kind !== "sliding") continue;
-    const dv = g.headDimV ?? g.headDim;
-    const q = m.hiddenSize * m.attentionHeads * g.headDim;
-    const o = m.attentionHeads * dv * m.hiddenSize;
-    const kv = m.hiddenSize * g.kvHeads * (g.headDim + dv);
-    p += g.count * (q + o + kv);
-  }
-  return p;
-}
-
 export function isMoE(m: ModelSpec): boolean {
   return m.activeParamsB !== undefined && m.activeParamsB < m.paramsB * 0.8;
 }
 
+/** Couches portant un cache. */
 export function totalLayers(m: ModelSpec): number {
   return m.layers.reduce((a, g) => a + g.count, 0);
+}
+
+/** Couches du décodeur (répartition des poids en PP). */
+export function decoderLayers(m: ModelSpec): number {
+  return Math.max(m.numLayers ?? 0, totalLayers(m));
 }
 
 function groupLabel(g: LayerGroup): string {
@@ -233,19 +235,43 @@ export function estimate(input: EstimateInput): Estimate {
 
   // --- Poids (format effectif en mémoire)
   const w = weightBytes(m, input.memoryWeightFormat ?? weightFormat);
-  const attentionBytes = Math.min(w.bytes, (attentionParams(m) * w.bits) / 8);
+  /** Octets de params paramètres : au format choisi s'ils sont quantifiés, en 16 bits sinon. */
+  const bytesOf = (params: number, quantized: boolean) => (params * (quantized || w.bits >= 16 ? w.bits : 16)) / 8;
+  const embBytes = bytesOf(embeddingParams(m), false);
+  const L = decoderLayers(m);
+  const layersPerStage = Math.ceil(L / pp);
   let weightsPerGpu = w.bytes / n;
-  let replicatedAttentionBytes = 0;
+  let nonExpertBytes = w.bytes;
+  let replicatedBytes = 0;
+  let dpUnvalidated = false;
   if (mode === "dp-ep" && n > 1) {
-    weightsPerGpu = attentionBytes + (w.bytes - attentionBytes) / n;
-    replicatedAttentionBytes = attentionBytes * (n - 1);
+    if (m.expertParamsB !== undefined) {
+      // Les experts routés sont répartis ; tout le reste (attention, embeddings, couches denses,
+      // experts partagés, routeur) est présent sur chaque rang, à sa précision réelle.
+      const expertBytes = bytesOf(Math.min(m.expertParamsB * 1e9, w.quantized), true);
+      nonExpertBytes = w.bytes - expertBytes;
+      weightsPerGpu = nonExpertBytes + expertBytes / n;
+    } else {
+      dpUnvalidated = true;
+      nonExpertBytes = w.bytes;
+      weightsPerGpu = w.bytes;
+    }
+    replicatedBytes = nonExpertBytes * (n - 1);
+  } else if (pp > 1) {
+    // Couches entières par étage : on dimensionne le rang le plus chargé (ceil(L / pp) couches),
+    // plus les embeddings d'entrée ou de sortie qu'il porte (copie sur les deux bords s'ils sont liés).
+    const embSide = m.tiedEmbeddings ? embBytes : embBytes / 2;
+    const body = w.bytes - embBytes;
+    weightsPerGpu = ((body * layersPerStage) / L + embSide) / tp;
+    if (m.tiedEmbeddings) replicatedBytes = embBytes;
   }
 
   // --- KV par requête
   const groups: GroupBreakdown[] = [];
+  const perLayer: { cost: number; group: number }[] = [];
   let perTokenBytes = 0;
   let constantBytes = 0;
-  for (const g of m.layers) {
+  m.layers.forEach((g, gi) => {
     let bytes: number;
     let detail: string;
     switch (g.kind) {
@@ -276,19 +302,16 @@ export function estimate(input: EstimateInput): Estimate {
       }
     }
     const s = mode === "dp-ep" || n === 1 ? { perGpu: 1, replication: 1 } : tpSharding(g, tp);
-    groups.push({
-      kind: g.kind,
-      label: groupLabel(g),
-      count: g.count,
-      detail,
-      bytes,
-      perGpuBytes: (bytes * s.perGpu) / pp,
-      replication: s.replication,
-    });
-  }
+    for (let k = 0; k < g.count; k++) perLayer.push({ cost: (bytes / g.count) * s.perGpu, group: gi });
+    groups.push({ kind: g.kind, label: groupLabel(g), count: g.count, detail, bytes, perGpuBytes: 0, replication: s.replication });
+  });
+  // Rang le plus chargé : au plus ceil(L / pp) couches, en prenant les plus coûteuses (borne prudente,
+  // l'ordre exact des couches n'étant pas connu).
+  perLayer.sort((a, b) => b.cost - a.cost);
+  for (const l of perLayer.slice(0, Math.min(layersPerStage, perLayer.length))) groups[l.group].perGpuBytes += l.cost;
   const perRequestBytes = groups.reduce((a, g) => a + g.bytes, 0);
   const perRequestPerGpuBytes = groups.reduce((a, g) => a + g.perGpuBytes, 0);
-  const perRequestClusterBytes = mode === "dp-ep" || n === 1 ? perRequestBytes : perRequestPerGpuBytes * n;
+  const perRequestClusterBytes = mode === "dp-ep" || n === 1 ? perRequestBytes : groups.reduce((a, g) => a + g.bytes * g.replication, 0);
 
   // --- Mémoire
   const gpuBytes = (input.memoryGiBOverride ?? gpu.memoryGiB) * GIB;
@@ -308,14 +331,16 @@ export function estimate(input: EstimateInput): Estimate {
   return {
     tp,
     pp,
+    layersPerStage,
     weights: {
       bitsPerParam: w.bits,
       totalBytes: w.bytes,
       perGpuBytes: weightsPerGpu,
       quantizedParams: w.quantized,
       unquantizedParams: w.unquantized,
-      attentionBytes,
-      replicatedAttentionBytes,
+      nonExpertBytes,
+      replicatedBytes,
+      dpUnvalidated,
     },
     kv: { perRequestBytes, perRequestClusterBytes, perRequestPerGpuBytes, perTokenBytes, constantBytes, groups },
     memory: {
@@ -327,6 +352,7 @@ export function estimate(input: EstimateInput): Estimate {
     },
     offload: { totalBytes: offloadTotal, parkedSessions, reloadMs },
     modelPlusOneKvBytes: w.bytes + perRequestBytes,
+    physicalOneRequestBytes: w.bytes + replicatedBytes + perRequestClusterBytes,
     fitsWeights,
     fitsOneRequest: fitsWeights && sessions >= 1,
     sessions,
@@ -373,6 +399,12 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       severity: eg.level === "unsupported" ? "error" : "warning",
       title: `${engine.name} sur ${gpu.name} : ${LEVEL_FR[eg.level]}`,
       detail: eg.note,
+    });
+  if (engine.modelFamilies && !engine.modelFamilies.includes(m.family))
+    out.push({
+      severity: "warning",
+      title: `Famille ${m.family} non annoncée par ${engine.name}`,
+      detail: `Familles annoncées : ${engine.modelFamilies.join(", ")}. Le modèle peut fonctionner, mais rien ne le garantit.`,
     });
   if (engine.confidence !== "high")
     out.push({ severity: "warning", title: `Profil ${engine.name} partiellement vérifié`, detail: engine.notes[0] });
@@ -548,8 +580,16 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
         detail: `Chaque rang TP stocke le latent complet. En DP-attention${engine.flags.dpAttention ? ` (${engine.flags.dpAttention})` : ""}, chaque GPU garde ses propres requêtes : capacité ≈ ×${tp}.`,
       });
     if (pp > 1) {
-      if (totalLayers(m) % pp !== 0)
-        out.push({ severity: "info", title: `PP=${pp} : ${totalLayers(m)} couches à cache non divisibles par ${pp}`, detail: "Répartition inégale : le GPU le plus chargé limite la capacité (calcul sur une moyenne)." });
+      const L = decoderLayers(m);
+      if (pp > L)
+        out.push({ severity: "error", title: `PP=${pp} supérieur au nombre de couches (${L})`, detail: "Chaque étage doit porter au moins une couche entière." });
+      else if (L % pp !== 0)
+        out.push({
+          severity: "info",
+          title: `PP=${pp} : jusqu'à ${est.layersPerStage} couches sur l'étage le plus chargé`,
+          detail: `${L} couches non divisibles par ${pp} : poids et KV calculés pour le rang le plus chargé (couches entières, les plus coûteuses en KV).`,
+        });
+      if (m.tiedEmbeddings) out.push({ severity: "info", title: "Embeddings liés en PP", detail: `Copie sur le premier et le dernier étage (+${gibText(est.weights.replicatedBytes)}).` });
       if (n % tp !== 0) out.push({ severity: "error", title: `${n} GPUs non divisibles par TP=${tp}`, detail: "TP × PP doit être égal au nombre de GPUs." });
     }
   }
@@ -560,11 +600,17 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       out.push({ severity: "warning", title: `DP-attention non vérifiée dans ${engine.name}`, detail: engine.featureNotes.dpAttention ?? "Aucune source ne confirme ce mode : résultat théorique." });
     if (!isMoE(m))
       out.push({ severity: "warning", title: "DP-attention conçu pour les MoE", detail: "Sur un modèle dense, cela revient à N répliques complètes." });
+    else if (n > 1 && est.weights.dpUnvalidated)
+      out.push({
+        severity: "error",
+        title: `DP-attention : paramètres des experts inconnus pour ${m.name}`,
+        detail: "Impossible de séparer experts répartis et tensors répliqués : capacité non validée (calcul avec le modèle complet par GPU). Renseignez expertParamsB dans le catalogue.",
+      });
     else if (n > 1)
       out.push({
         severity: "info",
         title: "DP-attention + expert parallel",
-        detail: `Poids d'attention répliqués sur chaque GPU (+${gibText(est.weights.replicatedAttentionBytes)} au total), experts répartis. Chaque requête vit sur un seul GPU.${m.attentionParamsB === undefined && m.layers.some((g) => g.kind === "mla" || g.kind === "linear") ? " Paramètres d'attention estimés partiellement (couches MLA/linéaires non comptées)." : ""}`,
+        detail: `Seuls les experts routés sont répartis. Attention, embeddings, couches denses et experts partagés (${gibText(est.weights.nonExpertBytes)}, à leur précision réelle) sont présents sur chaque GPU : +${gibText(est.weights.replicatedBytes)} au total. Chaque requête vit sur un seul GPU.`,
       });
   }
 

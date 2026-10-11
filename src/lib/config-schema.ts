@@ -106,6 +106,8 @@ const engineSchema = z.strictObject({
   /** Précisions ou sources par capacité. */
   featureNotes: z.record(z.string(), z.string()).default({}),
   sources: z.array(z.strictObject({ label: z.string(), url: z.string() })).default([]),
+  /** Familles de modèles annoncées par le moteur (valeurs de `family`). Absent = pas de restriction. */
+  modelFamilies: z.array(z.string()).optional(),
   /** Absent = non supporté par le moteur. */
   weightFormats: z.record(z.string(), supportSchema),
   kvCacheFormats: z.record(z.string(), supportSchema),
@@ -182,8 +184,10 @@ export const modelSchema = z.strictObject({
   /** Paramètres conservés en 16 bits en plus des embeddings (encodeur vision, attention...). */
   extraUnquantizedParamsB: z.number().nonnegative().default(0),
   attentionHeads: z.number().int().positive(),
-  /** Paramètres d'attention (répliqués en DP-attention). Calculé si absent. */
-  attentionParamsB: z.number().nonnegative().optional(),
+  /** Nombre total de couches du décodeur (num_hidden_layers), si différent des couches à cache (Mamba/MLP, NAS). */
+  numLayers: z.number().int().positive().optional(),
+  /** Paramètres des experts routés (MoE), en milliards : seuls ceux-ci sont répartis en DP-attention + EP. */
+  expertParamsB: z.number().nonnegative().optional(),
   layers: z.array(layerGroupSchema).min(1),
   maxContext: z.number().int().positive(),
   /** Contexte atteignable par extension RoPE (YaRN...). */
@@ -192,6 +196,8 @@ export const modelSchema = z.strictObject({
   /** Bits effectifs réels du checkpoint natif s'ils diffèrent du format générique (ex. INT4 g32 = 4,5). */
   nativeBitsPerParam: z.number().positive().optional(),
   officialWeightFormats: z.array(z.string()).default([]),
+  /** Dépôt du checkpoint officiel par format (format natif = source). */
+  checkpoints: z.record(z.string(), z.string()).default({}),
   /** Octets par élément de l'état récurrent (4 si mamba_ssm_cache_dtype = float32). */
   ssmStateBytes: z.number().positive().default(2),
   /** Octets par élément de l'état de convolution. */

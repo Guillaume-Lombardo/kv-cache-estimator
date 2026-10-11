@@ -100,14 +100,14 @@ export function estimatePerf(input: EstimateInput, est: Estimate, perf: Performa
     let compS: number;
     if (mode === "dp-ep") {
       const perGpuSeqs = Math.ceil(batch / n);
-      const attn = est.weights.attentionBytes;
-      memS = (attn + weightsRead(W - attn, batch) / n + perGpuSeqs * est.kv.perRequestPerGpuBytes) / bytesPerSec;
+      const shared = est.weights.nonExpertBytes;
+      memS = (shared + weightsRead(W - shared, batch) / n + perGpuSeqs * est.kv.perRequestPerGpuBytes) / bytesPerSec;
       compS = (batch * flopsTok) / n / flopsPerSec;
       stepS = Math.max(memS, compS) + (2 * layers * collectiveLatencyUs(gpu, n, perf)) / 1e6;
     } else {
       const { tp, pp } = est;
       const micro = Math.ceil(batch / pp);
-      memS = (weightsRead(W, micro) / n + micro * est.kv.perRequestPerGpuBytes) / bytesPerSec;
+      memS = ((weightsRead(W, micro) / W) * est.weights.perGpuBytes + micro * est.kv.perRequestPerGpuBytes) / bytesPerSec;
       compS = (micro * flopsTok) / n / flopsPerSec;
       const comm = (2 * (layers / pp) * collectiveLatencyUs(gpu, tp, perf) + (pp > 1 ? collectiveLatencyUs(gpu, n, perf) : 0)) / 1e6;
       // Chaque étape de décodage traverse les pp étages ; chaque étage traite pp micro-batchs.

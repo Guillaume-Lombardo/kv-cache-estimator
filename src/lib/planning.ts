@@ -74,12 +74,20 @@ export interface SizingRow {
  * Dimensionnement inverse : pour chaque GPU, plus petit nombre de cartes qui atteint `targetSessions`
  * sans erreur bloquante, en testant TP×PP (TP valides) et DP-attention.
  */
+/** Configuration recommandable : aucune erreur bloquante (formats, parallélisme, contexte, capacité). */
+export function isValidConfig(cfg: AppConfig, input: EstimateInput): boolean {
+  const est = estimate(input);
+  return !collectIssues(input, est, cfg.weightFormats).some((i) => i.severity === "error");
+}
+
 export function sizeForTarget(
   cfg: AppConfig,
   base: Omit<EstimateInput, "gpu" | "gpuCount" | "tp" | "mode" | "weightFormat" | "kvFormat"> & { weightFormatId: string; kvFormatId: string },
   targetSessions: number,
+  baseGpuId?: string,
 ): SizingRow[] {
   const rows: SizingRow[] = [];
+  const maxCtx = base.model.maxContextExtended ?? base.model.maxContext;
   for (const gpu of cfg.gpus) {
     const wfId = pickWeightFormat(cfg, base.model, gpu, base.engine, base.weightFormatId);
     const kfId = pickKvFormat(cfg, gpu, base.engine, base.kvFormatId);
@@ -100,11 +108,13 @@ export function sizeForTarget(
       let best: { input: EstimateInput; sessions: number; rate: number; score: number; unverified: boolean } | null = null;
       for (const c of configs) {
         const memoryWeightFormat = memoryFormatFor(cfg.weightFormats, gpu, base.engine, weightFormat);
-        const input: EstimateInput = { ...base, gpu, gpuCount: n, mode: c.mode, tp: c.tp, weightFormat, memoryWeightFormat, kvFormat };
+        // La mémoire visible personnalisée ne vaut que pour la carte sur laquelle elle a été saisie.
+        const memoryGiBOverride = gpu.id === baseGpuId ? base.memoryGiBOverride : undefined;
+        const input: EstimateInput = { ...base, gpu, gpuCount: n, mode: c.mode, tp: c.tp, weightFormat, memoryWeightFormat, kvFormat, memoryGiBOverride };
         const est = estimate(input);
         if (est.sessions < targetSessions) continue;
         const issues = collectIssues(input, est, cfg.weightFormats);
-        if (issues.some((i) => i.severity === "error" && !i.title.startsWith("Contexte"))) continue;
+        if (issues.some((i) => i.severity === "error")) continue;
         // Une configuration qui repose sur une capacité non vérifiée passe après les configurations vérifiées.
         const unverified = issues.some((i) => /(non vérifié|non vérifiée)/.test(i.title) && /(parallel|DP-attention)/i.test(i.title));
         const rate = estimatePerf(input, est, cfg.performance).at(targetSessions).tokPerSecTotal;
@@ -126,6 +136,7 @@ export function sizeForTarget(
         break;
       }
     }
+    if (!found && base.contextTokens > maxCtx) notes.push("contexte hors limite du modèle");
     rows.push(
       found ?? {
         gpu,
@@ -143,9 +154,14 @@ export function sizeForTarget(
   return rows.sort((a, b) => (a.gpuCount ?? 1e9) - (b.gpuCount ?? 1e9) || b.sessions - a.sessions);
 }
 
-/** Plus grand contexte (parmi les crans) qui permet `targetSessions` sessions. */
-export function maxContextFor(input: EstimateInput, targetSessions: number): number | null {
+/** Plus grand contexte (parmi les crans, dans la limite du modèle) qui permet `targetSessions` sessions sans erreur. */
+export function maxContextFor(cfg: AppConfig, input: EstimateInput, targetSessions: number): number | null {
   let best: number | null = null;
-  for (const t of CONTEXT_STEPS) if (estimate({ ...input, contextTokens: t }).sessions >= targetSessions) best = t;
+  const limit = input.model.maxContextExtended ?? input.model.maxContext;
+  for (const t of CONTEXT_STEPS) {
+    if (t > limit) break;
+    const i = { ...input, contextTokens: t };
+    if (estimate(i).sessions >= targetSessions && isValidConfig(cfg, i)) best = t;
+  }
   return best;
 }

@@ -104,45 +104,66 @@ engines:
       dpAttention: --data-parallel-size N --enable-expert-parallel
       kvOffload: "--kv-offloading-size <Gio> (connecteur natif) ou LMCache"
 
+  # Règle du profil :
+  #   - capacités serveur (pagination, batching, prefix caching, TP) : documentation LLMD ;
+  #   - formats, précision du KV, fenêtres glissantes : code de la bibliothèque ZML @3500e88 (9 oct. 2026),
+  #     backend CUDA. Implémenté et branché → oui ; présent mais non branché ou sans source → non vérifié ;
+  #     TODO ou panic explicite → non. Le code de LLMD lui-même n'est pas public.
   - id: zml
     name: ZML / LLMD
-    description: "Serveur LLMD de ZML (bibliothèque github.com/zml/zml, compilation OpenXLA/PJRT). Seules les capacités sourcées sont confirmées."
-    version: LLMD (doc zml.ai/llmd)
+    description: "Serveur LLMD de ZML, sur la bibliothèque github.com/zml/zml (OpenXLA/PJRT). Capacités serveur selon la doc LLMD, formats selon le code de la bibliothèque."
+    version: LLMD (page zml.ai/llmd, oct. 2026) + bibliothèque ZML @3500e88
     confidence: medium
+    # Page LLMD : « A self-contained inference server for LLaMa, Gemma, Qwen and Mistral models ».
+    modelFamilies: [Meta (Llama), Google (Gemma), Qwen (Alibaba), Mistral AI]
     features:
       kvPaging: true
       kvPoolPreallocated: unverified
       prefixCaching: true
       continuousBatching: true
-      slidingWindowAttention: unverified
+      slidingWindowAttention: true
       slidingWindowFreesBlocks: unverified
       tensorParallel: true
       pipelineParallel: unverified
       dpAttention: unverified
       kvOffload: unverified
     featureNotes:
-      kvPaging: PagedAttention (documentation LLMD).
-      prefixCaching: Documentation LLMD.
-      continuousBatching: Documentation LLMD.
-      tensorParallel: Documentation LLMD.
+      kvPaging: "« Paged attention » (page LLMD). Bibliothèque : API paginée, taille de page = dimension k_chunk du pool {page, k_chunk, hkv, hd} (zml/attention/paged_attention.zig)."
+      kvPoolPreallocated: "Non documenté pour LLMD. Bibliothèque : pas de gestionnaire de pages ni de dimensionnement du pool par fraction mémoire ; seul l'allocateur XLA/PJRT réserve 90 % (memory_fraction, zml/platform.zig) ; les exemples préallouent un cache dense au démarrage."
+      prefixCaching: "« Prefix caching » (page LLMD) ; absent de la bibliothèque (implémenté côté serveur)."
+      continuousBatching: "« Continuous batching » (page LLMD). Bibliothèque : batch mixte prefill/decode (batch_size_prefill / batch_size_decode)."
+      slidingWindowAttention: "LLMD sert Gemma (page LLMD), dont les couches locales l'exigent. Masque à fenêtre dans les noyaux CUDA FA2, FA3 et Triton (paged_attention.zig, flashattn.zig) ; refusé sur StableHLO (panic)."
+      slidingWindowFreesBlocks: "Bibliothèque : aucune libération des pages hors fenêtre, gain de calcul seulement (tuiles sautées). La gestion des pages relève de LLMD (code non public)."
+      tensorParallel: "« Tensor parallel sharding » (page LLMD). Bibliothèque : têtes KV shardées sur l'axe model, répliquées si non divisibles."
+      pipelineParallel: Absent de la page LLMD et de la bibliothèque.
+      dpAttention: "Bibliothèque : expert parallel (axe experts) et axe data, sans DP-attention dédiée."
+      kvOffload: Absent de la page LLMD et de la bibliothèque.
     sources:
       - { label: Documentation LLMD, url: "https://zml.ai/llmd/" }
-      - { label: Dépôt ZML, url: "https://github.com/zml/zml" }
+      - { label: "Bibliothèque ZML @3500e88", url: "https://github.com/zml/zml/tree/3500e88cf84e0e98d37b0f6048e6af9d33bc6108" }
     weightFormats:
-      bf16: unverified
-      fp16: unverified
-      fp8: unverified
-      int8: unverified
-      int4: unverified
-      mxfp4: unverified
-      nvfp4: unverified
+      bf16: { level: native, note: "Modèles BF16 servis tels quels (page LLMD : Qwen/Qwen3-8B, Qwen3.6-27B ; gabarit de bug LLMD : gemma-4-31B-it)." }
+      fp16: { level: native, note: "F16 accepté par les noyaux d'attention CUDA (flashattn.zig)." }
+      fp8: { level: unverified, note: "Bibliothèque : schémas fp8_block128 (DeepSeek), fp8_block32, fp8_per_channel, fp8_per_tensor, gardés quantifiés en mémoire (xla.scaled_dot, zml/nn.zig) ; MoE FP8 via Triton. Chargement par LLMD non vérifié." }
+      int8: { level: unsupported, note: "Non implémenté dans la bibliothèque ZML @3500e88 (TODO « INT4/8 », zml/nn.zig)." }
+      int4: { level: unsupported, note: "AWQ / GPTQ / INT4 non implémentés dans la bibliothèque ZML @3500e88 (TODO « INT4/8 », zml/nn.zig)." }
+      mxfp4: { level: unverified, note: "Bibliothèque : schéma mxfp4 (échelle E8M0 / 32), gardé quantifié ; MoE via CuTe ou Triton MXFP4 sur Blackwell (sm10x), Triton générique ailleurs. Chargement par LLMD non vérifié." }
+      nvfp4: { level: unverified, note: "Bibliothèque : schéma nvfp4 (échelle E4M3 / 16), gardé quantifié ; MoE NVFP4 uniquement via FlashInfer CUTLASS sur sm100/103/120 (erreur ailleurs) ; quantification des activations sur sm100+. Chargement par LLMD non vérifié." }
     kvCacheFormats:
-      bf16: unverified
-      fp16: unverified
-      fp8: unverified
-      nvfp4: unverified
+      bf16: { level: native, note: "Type du cache = type des embeddings (exemples ZML)." }
+      fp16: native
+      fp8: { level: unsupported, note: "bibliothèque ZML @3500e88 : FA2/FA3 refusent le FP8 (panic), noyau Triton capable de déquantifier mais désactivé dans le wrapper (use_fp8 = false). Exception : cache MLA FP8/FP4 sur Blackwell (CuTe)." }
+      nvfp4: { level: unsupported, note: "Pas de KV FP4 pour l'attention standard dans la bibliothèque ZML @3500e88 (cache compressé FP4 seulement pour la MLA parcimonieuse sur Blackwell)." }
+    gpus:
+      v100: { level: unverified, note: "Aucune vérification sm70 dans la bibliothèque (FA3 réservé à sm90, FA2 sans minimum déclaré)." }
     notes:
-      - "Profil en cours de vérification : formats de poids, précision du KV et fenêtres glissantes sans source confirmée."
+      - "Capacités serveur selon la documentation LLMD ; formats, précision du KV et fenêtres glissantes selon le code de la bibliothèque ZML @3500e88, backend CUDA. Le code de LLMD n'est pas public : une version plus récente peut différer."
+      - "États récurrents (Gated DeltaNet) en FP32 dans la bibliothèque, préalloués."
+      - "MLA : cache latent 512 + RoPE 64 ; cache de l'indexeur DSA non trouvé dans la bibliothèque."
+      - "FlashAttention 3 sur sm90 (H100/H200/GH200), FlashAttention 2 sur les autres GPU CUDA, Triton pour l'attention paginée."
+      - "Page LLMD : CUDA, ROCm, TPU, oneAPI et Metal ; image zmlai/llmd:cuda (1,7 Go) ; chargement direct hf://, s3://, gs:// ; tool calling ; métriques Prometheus (/metrics)."
+      - "Décodage spéculatif DFlash natif pour Gemma 4 (Qwen prévu) : non modélisé ici (réduit la latence, ajoute un modèle brouillon en mémoire)."
+      - "La page ne précise ni les formats de poids, ni la précision du KV, ni la gestion des fenêtres glissantes : ces points viennent du code de la bibliothèque."
       - "À ne pas confondre avec llm-d (orchestration Kubernetes de vLLM), couvert par le profil vLLM."
 
 # -----------------------------------------------------------------------------
@@ -397,6 +418,7 @@ gpus:
 #   linear  : Mamba / DeltaNet / KDA      { count, ssmElements, convElements }  (état constant)
 # Les couches sans cache (MLP seules, MTP) ne sont pas listées.
 # revision : révision Hugging Face du config.json vérifié (copie dans config/upstream/).
+# checkpoints : dépôt officiel par format quantifié (utilisé par la commande de lancement).
 # confidence : high | medium | low.
 # -----------------------------------------------------------------------------
 models:
@@ -407,11 +429,11 @@ models:
     source: mistralai/Mistral-Large-3-675B-Instruct-2512
     paramsB: 675
     activeParamsB: 41
+    expertParamsB: 653.9
     hiddenSize: 7168
     vocabSize: 131072
     extraUnquantizedParamsB: 2.5
     attentionHeads: 128
-    attentionParamsB: 11.4
     layers:
       - { kind: mla, count: 61, kvLoraRank: 512, ropeHeadDim: 64 }
     maxContext: 294912
@@ -591,6 +613,7 @@ models:
     source: mistralai/Mixtral-8x22B-Instruct-v0.1
     paramsB: 140.6
     activeParamsB: 39.1
+    expertParamsB: 135.3
     hiddenSize: 6144
     vocabSize: 32768
     attentionHeads: 48
@@ -607,6 +630,7 @@ models:
     source: mistralai/Mixtral-8x7B-Instruct-v0.1
     paramsB: 46.7
     activeParamsB: 12.9
+    expertParamsB: 45.1
     hiddenSize: 4096
     vocabSize: 32000
     attentionHeads: 32
@@ -639,10 +663,10 @@ models:
     revision: aca966e4e02791568aa6a4ced368624b3d897f42
     paramsB: 753.3
     activeParamsB: 40
+    expertParamsB: 724.8
     hiddenSize: 6144
     vocabSize: 154880
     attentionHeads: 64
-    attentionParamsB: 10
     layers:
       # DeepSeek Sparse Attention : indexeur FP8 (128 dims + échelle FP32) sur les 21 couches "full",
       # les 57 autres réutilisent l'index (IndexShare).
@@ -664,10 +688,10 @@ models:
     revision: eb9eb208eb0d988989d07a6a12d0fdeb5f52574a
     paramsB: 321.3
     activeParamsB: 17
+    expertParamsB: 304.4
     hiddenSize: 4096
     vocabSize: 154880
     attentionHeads: 64
-    attentionParamsB: 6
     layers:
       - { kind: linear, count: 34, ssmElements: 1048576, convElements: 73728, label: KDA (état constant) }
       # Indexeur DSA avec pooling ×4 des clés (index_kpool) : ~132/4 octets par token.
@@ -688,10 +712,10 @@ models:
     source: zai-org/GLM-5
     paramsB: 744
     activeParamsB: 40
+    expertParamsB: 724.8
     hiddenSize: 6144
     vocabSize: 154880
     attentionHeads: 64
-    attentionParamsB: 10
     layers:
       - { kind: mla, count: 78, kvLoraRank: 512, ropeHeadDim: 64, extraBytesPerToken: 132 }
     maxContext: 202752
@@ -708,6 +732,7 @@ models:
     revision: 602d01efcdd332c5238ca4bcede555defbe83eb7
     paramsB: 358.3
     activeParamsB: 32
+    expertParamsB: 335.9
     hiddenSize: 5120
     vocabSize: 151552
     attentionHeads: 96
@@ -716,6 +741,7 @@ models:
     maxContext: 202752
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
+    checkpoints: { fp8: zai-org/GLM-4.7-FP8 }
     tags: [moe]
     notes: [Couche MTP (décodage spéculatif) incluse dans les paramètres, pas dans le KV.]
 
@@ -725,6 +751,7 @@ models:
     source: zai-org/GLM-4.6
     paramsB: 358.3
     activeParamsB: 32
+    expertParamsB: 335.9
     hiddenSize: 5120
     vocabSize: 151552
     attentionHeads: 96
@@ -733,6 +760,7 @@ models:
     maxContext: 202752
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
+    checkpoints: { fp8: zai-org/GLM-4.6-FP8 }
     tags: [moe]
 
   - id: glm-4.5-air
@@ -741,6 +769,7 @@ models:
     source: zai-org/GLM-4.5-Air
     paramsB: 110
     activeParamsB: 12
+    expertParamsB: 99.7
     hiddenSize: 4096
     vocabSize: 151552
     attentionHeads: 96
@@ -749,6 +778,7 @@ models:
     maxContext: 131072
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
+    checkpoints: { fp8: zai-org/GLM-4.5-Air-FP8 }
     tags: [moe]
 
   - id: glm-4.6v
@@ -757,6 +787,7 @@ models:
     source: zai-org/GLM-4.6V
     paramsB: 108
     activeParamsB: 12
+    expertParamsB: 99.7
     hiddenSize: 4096
     vocabSize: 151552
     extraUnquantizedParamsB: 0.9
@@ -776,10 +807,10 @@ models:
     revision: 7dd20894a642a0aa287e9827cb1a1f7f91386b67
     paramsB: 31.2
     activeParamsB: 3
+    expertParamsB: 27.8
     hiddenSize: 2048
     vocabSize: 154880
     attentionHeads: 20
-    attentionParamsB: 1.0
     layers:
       - { kind: mla, count: 47, kvLoraRank: 512, ropeHeadDim: 64 }
     maxContext: 202752
@@ -810,11 +841,11 @@ models:
     revision: f831ab66814297da540d832a5235f8e904f29d06
     paramsB: 2800
     activeParamsB: 100
+    expertParamsB: 2721
     hiddenSize: 7168
     vocabSize: 163840
     extraUnquantizedParamsB: 54.8
     attentionHeads: 96
-    attentionParamsB: 30
     layers:
       - { kind: linear, count: 69, ssmElements: 1572864, convElements: 110592, label: KDA (état constant) }
       - { kind: mla, count: 24, kvLoraRank: 512, ropeHeadDim: 0 }
@@ -835,11 +866,11 @@ models:
     revision: 4d01dfe0332d63057c186e0b262165819efb6611
     paramsB: 1027
     activeParamsB: 32
+    expertParamsB: 1014.6
     hiddenSize: 7168
     vocabSize: 163840
     extraUnquantizedParamsB: 9.8
     attentionHeads: 64
-    attentionParamsB: 6.2
     layers:
       - { kind: mla, count: 61, kvLoraRank: 512, ropeHeadDim: 64 }
     maxContext: 262144
@@ -855,11 +886,11 @@ models:
     source: moonshotai/Kimi-K2-Thinking
     paramsB: 1026
     activeParamsB: 32
+    expertParamsB: 1014.6
     hiddenSize: 7168
     vocabSize: 163840
     extraUnquantizedParamsB: 9.8
     attentionHeads: 64
-    attentionParamsB: 6.2
     layers:
       - { kind: mla, count: 61, kvLoraRank: 512, ropeHeadDim: 64 }
     maxContext: 262144
@@ -876,10 +907,10 @@ models:
     revision: fd1984e2b7a3350dbf7305fe73a4ede25c14de50
     paramsB: 1026.4
     activeParamsB: 32
+    expertParamsB: 1014.6
     hiddenSize: 7168
     vocabSize: 163840
     attentionHeads: 64
-    attentionParamsB: 6.2
     layers:
       - { kind: mla, count: 61, kvLoraRank: 512, ropeHeadDim: 64 }
     maxContext: 262144
@@ -897,7 +928,6 @@ models:
     hiddenSize: 2304
     vocabSize: 163840
     attentionHeads: 32
-    attentionParamsB: 1.5
     layers:
       - { kind: linear, count: 20, ssmElements: 524288, convElements: 36864, label: KDA (état constant) }
       - { kind: mla, count: 7, kvLoraRank: 512, ropeHeadDim: 0 }
@@ -917,6 +947,7 @@ models:
     revision: b61f21852680ee02a29e946e18cf8697f4844061
     paramsB: 1024
     activeParamsB: 42
+    expertParamsB: 999.6
     hiddenSize: 6144
     vocabSize: 152576
     extraUnquantizedParamsB: 8.8
@@ -938,6 +969,7 @@ models:
     revision: dcd3fd83fb181622fbc606fbb1709901982a62c2
     paramsB: 311
     activeParamsB: 15
+    expertParamsB: 303.2
     hiddenSize: 4096
     vocabSize: 152576
     extraUnquantizedParamsB: 2.85
@@ -957,6 +989,7 @@ models:
     source: XiaomiMiMo/MiMo-V2-Flash
     paramsB: 309
     activeParamsB: 15
+    expertParamsB: 303.2
     hiddenSize: 4096
     vocabSize: 152576
     attentionHeads: 64
@@ -1016,6 +1049,7 @@ models:
     revision: 59d61f3ce65a6d9863b86d2e96597125219dc754
     paramsB: 35.95
     activeParamsB: 3
+    expertParamsB: 32.2
     hiddenSize: 2048
     vocabSize: 248320
     extraUnquantizedParamsB: 0.4
@@ -1037,6 +1071,7 @@ models:
     source: Qwen/Qwen3-Coder-480B-A35B-Instruct
     paramsB: 480.2
     activeParamsB: 35
+    expertParamsB: 468.0
     hiddenSize: 6144
     vocabSize: 151936
     attentionHeads: 96
@@ -1046,6 +1081,7 @@ models:
     maxContextExtended: 1048576
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
+    checkpoints: { fp8: Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8 }
     tags: [moe, code]
 
   - id: qwen3-235b-2507
@@ -1055,6 +1091,7 @@ models:
     revision: ac9c66cc9b46af7306746a9250f23d47083d689e
     paramsB: 235.09
     activeParamsB: 22
+    expertParamsB: 227.1
     hiddenSize: 4096
     vocabSize: 151936
     attentionHeads: 64
@@ -1064,6 +1101,7 @@ models:
     maxContextExtended: 1048576
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
+    checkpoints: { fp8: Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 }
     tags: [moe]
 
   - id: qwen3-next-80b
@@ -1072,6 +1110,7 @@ models:
     source: Qwen/Qwen3-Next-80B-A3B-Instruct
     paramsB: 81.3
     activeParamsB: 3
+    expertParamsB: 77.3
     hiddenSize: 2048
     vocabSize: 151936
     attentionHeads: 16
@@ -1082,6 +1121,7 @@ models:
     maxContextExtended: 1048576
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
+    checkpoints: { fp8: Qwen/Qwen3-Next-80B-A3B-Instruct-FP8 }
     tags: [moe, hybrid]
     confidence: medium
 
@@ -1091,6 +1131,7 @@ models:
     source: Qwen/Qwen3-30B-A3B-Instruct-2507
     paramsB: 30.5
     activeParamsB: 3.3
+    expertParamsB: 29.0
     hiddenSize: 2048
     vocabSize: 151936
     attentionHeads: 32
@@ -1100,6 +1141,7 @@ models:
     maxContextExtended: 1048576
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
+    checkpoints: { fp8: Qwen/Qwen3-30B-A3B-Instruct-2507-FP8 }
     tags: [moe]
 
   - id: qwen3-coder-30b
@@ -1108,6 +1150,7 @@ models:
     source: Qwen/Qwen3-Coder-30B-A3B-Instruct
     paramsB: 30.5
     activeParamsB: 3.3
+    expertParamsB: 29.0
     hiddenSize: 2048
     vocabSize: 151936
     attentionHeads: 32
@@ -1134,6 +1177,7 @@ models:
     maxContextExtended: 131072
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8, int4]
+    checkpoints: { fp8: Qwen/Qwen3-32B-FP8, int4: Qwen/Qwen3-32B-AWQ }
 
   - id: qwen3-14b
     name: Qwen3-14B
@@ -1149,6 +1193,7 @@ models:
     maxContextExtended: 131072
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8, int4]
+    checkpoints: { fp8: Qwen/Qwen3-14B-FP8, int4: Qwen/Qwen3-14B-AWQ }
 
   - id: qwen3-8b
     name: Qwen3-8B
@@ -1165,6 +1210,7 @@ models:
     maxContextExtended: 131072
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8, int4]
+    checkpoints: { fp8: Qwen/Qwen3-8B-FP8, int4: Qwen/Qwen3-8B-AWQ }
 
   - id: qwen3-4b-2507
     name: Qwen3-4B-2507
@@ -1218,10 +1264,10 @@ models:
     source: deepseek-ai/DeepSeek-V3.2
     paramsB: 671
     activeParamsB: 37
+    expertParamsB: 653.9
     hiddenSize: 7168
     vocabSize: 129280
     attentionHeads: 128
-    attentionParamsB: 11.4
     layers:
       # DeepSeek Sparse Attention : indexeur FP8 (128 dims + échelle FP32) sur chaque couche.
       - { kind: mla, count: 61, kvLoraRank: 512, ropeHeadDim: 64, extraBytesPerToken: 132 }
@@ -1238,10 +1284,10 @@ models:
     source: deepseek-ai/DeepSeek-V3.1
     paramsB: 671
     activeParamsB: 37
+    expertParamsB: 653.9
     hiddenSize: 7168
     vocabSize: 129280
     attentionHeads: 128
-    attentionParamsB: 11.4
     layers:
       - { kind: mla, count: 61, kvLoraRank: 512, ropeHeadDim: 64 }
     maxContext: 131072
@@ -1257,10 +1303,10 @@ models:
     source: deepseek-ai/DeepSeek-R1-0528
     paramsB: 671
     activeParamsB: 37
+    expertParamsB: 653.9
     hiddenSize: 7168
     vocabSize: 129280
     attentionHeads: 128
-    attentionParamsB: 11.4
     layers:
       - { kind: mla, count: 61, kvLoraRank: 512, ropeHeadDim: 64 }
     maxContext: 131072
@@ -1276,6 +1322,7 @@ models:
     source: openai/gpt-oss-120b
     paramsB: 116.8
     activeParamsB: 5.1
+    expertParamsB: 114.7
     hiddenSize: 2880
     vocabSize: 201088
     extraUnquantizedParamsB: 1.0
@@ -1295,6 +1342,7 @@ models:
     source: openai/gpt-oss-20b
     paramsB: 20.9
     activeParamsB: 3.6
+    expertParamsB: 19.1
     hiddenSize: 2880
     vocabSize: 201088
     extraUnquantizedParamsB: 0.65
@@ -1314,6 +1362,7 @@ models:
     source: meta-llama/Llama-4-Maverick-17B-128E-Instruct
     paramsB: 401.6
     activeParamsB: 17
+    expertParamsB: 386.5
     hiddenSize: 5120
     vocabSize: 202048
     extraUnquantizedParamsB: 0.9
@@ -1325,6 +1374,7 @@ models:
     maxContext: 1048576
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
+    checkpoints: { fp8: meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8 }
     tags: [moe, swa, vision]
     notes: [Licence Llama 4. Attention locale par chunks de 8k sur 36 couches.]
 
@@ -1334,6 +1384,7 @@ models:
     source: meta-llama/Llama-4-Scout-17B-16E-Instruct
     paramsB: 108.6
     activeParamsB: 17
+    expertParamsB: 96.6
     hiddenSize: 5120
     vocabSize: 202048
     extraUnquantizedParamsB: 0.9
@@ -1360,6 +1411,7 @@ models:
     maxContext: 131072
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
+    checkpoints: { fp8: meta-llama/Llama-3.1-405B-Instruct-FP8 }
     notes: [Licence Llama 3.1.]
 
   - id: llama-3.3-70b
@@ -1400,10 +1452,11 @@ models:
     revision: 2dc98e2afe4face0e4ce40972a915c45368bd34a
     paramsB: 123.6
     activeParamsB: 12
+    expertParamsB: 112.7
     hiddenSize: 4096
     vocabSize: 131072
     attentionHeads: 32
-    attentionParamsB: 0.4
+    numLayers: 88
     layers:
       - { kind: linear, count: 40, ssmElements: 1048576, convElements: 30720, label: Mamba-2 (état constant) }
       - { kind: full, count: 8, kvHeads: 2, headDim: 128 }
@@ -1422,10 +1475,11 @@ models:
     revision: bf77c3174f68ad409e1c2aa60daeb46e32d1c606
     paramsB: 31.58
     activeParamsB: 3.6
+    expertParamsB: 29.4
     hiddenSize: 2688
     vocabSize: 131072
     attentionHeads: 32
-    attentionParamsB: 0.2
+    numLayers: 52
     layers:
       - { kind: linear, count: 23, ssmElements: 524288, convElements: 18432, label: Mamba-2 (état constant) }
       - { kind: full, count: 6, kvHeads: 2, headDim: 128 }
@@ -1446,6 +1500,7 @@ models:
     hiddenSize: 8192
     vocabSize: 128256
     attentionHeads: 64
+    numLayers: 80
     layers:
       - { kind: full, count: 49, kvHeads: 8, headDim: 128 }
     maxContext: 131072
@@ -1462,7 +1517,7 @@ models:
     hiddenSize: 4480
     vocabSize: 131072
     attentionHeads: 40
-    attentionParamsB: 0.2
+    numLayers: 56
     layers:
       - { kind: linear, count: 27, ssmElements: 1310720, convElements: 36864, label: Mamba-2 (état constant) }
       - { kind: full, count: 4, kvHeads: 8, headDim: 128 }
@@ -1503,6 +1558,7 @@ models:
     revision: 24548b62aa021d562695c04aaf7758a1ea47990b
     paramsB: 26.54
     activeParamsB: 4
+    expertParamsB: 22.8
     hiddenSize: 2816
     vocabSize: 262144
     tiedEmbeddings: true

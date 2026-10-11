@@ -38,7 +38,8 @@ export function ComparePanel({
     const issues = collectIssues(input, est, config.weightFormats);
     return { c, input, est, perf, errors: issues.filter((i) => i.severity === "error").length, warnings: issues.filter((i) => i.severity === "warning").length };
   });
-  const best = Math.max(...data.map((d) => d.est?.sessions ?? 0));
+  // Seules les configurations sans erreur bloquante peuvent être désignées comme meilleures.
+  const best = Math.max(0, ...data.filter((d) => d.est && !d.errors).map((d) => d.est!.sessions));
 
   const rows: { label: string; cell: (d: (typeof data)[number]) => React.ReactNode }[] = [
     { label: "Modèle", cell: (d) => d.input?.model.name },
@@ -52,7 +53,13 @@ export function ComparePanel({
     { label: "KV disponible", cell: (d) => d.est && fmtBytes(d.est.memory.freeForKvTotalBytes) },
     {
       label: "Sessions",
-      cell: (d) => d.est && <strong className={d.est.sessions === best && best > 0 ? "best" : ""}>{fmtInt(d.est.sessions)}</strong>,
+      cell: (d) =>
+        d.est && (
+          <strong className={!d.errors && d.est.sessions === best && best > 0 ? "best" : d.errors ? "muted" : ""} title={d.errors ? "Configuration invalide (erreurs bloquantes)" : undefined}>
+            {fmtInt(d.est.sessions)}
+            {d.errors ? " (invalide)" : ""}
+          </strong>
+        ),
     },
     { label: "Débit 1 session", cell: (d) => d.perf && fmtRate(d.perf.single.tokPerSecPerSession) },
     { label: "Débit agrégé", cell: (d) => (d.perf?.full ? fmtRate(d.perf.full.tokPerSecTotal) : "—") },

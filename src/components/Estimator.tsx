@@ -124,8 +124,10 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
     const n = counts.includes(s.gpuCount) ? s.gpuCount : 8;
     if (n !== s.gpuCount) msgs.push(`${s.gpuCount} GPUs non proposé pour ${g.name} → ${n}.`);
     const f = adjustFormats(model, g, engine, msgs);
+    // La mémoire visible personnalisée est propre à une carte : on la réinitialise.
+    if (s.memGiB !== undefined) msgs.push(`Mémoire visible personnalisée (${s.memGiB} Gio) réinitialisée pour ${g.name}.`);
     setNotices(msgs);
-    setS({ ...s, gpuId: id, gpuCount: n, tp: defaultTp(model, g, n), ...f });
+    setS({ ...s, gpuId: id, gpuCount: n, tp: defaultTp(model, g, n), ...f, memGiB: undefined });
   };
   const setEngine = (id: string) => {
     const e = config.engines.find((x) => x.id === id)!;
@@ -149,8 +151,12 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
     setS(fixed);
   };
   const applySizing = (c: SizingChoice) => {
-    setNotices([`Configuration appliquée depuis le dimensionnement.`]);
-    setS({ ...s, ...c });
+    const sameGpu = c.gpuId === s.gpuId;
+    setNotices([
+      "Configuration appliquée depuis le dimensionnement.",
+      ...(!sameGpu && s.memGiB !== undefined ? [`Mémoire visible personnalisée réinitialisée (autre carte).`] : []),
+    ]);
+    setS({ ...s, ...c, memGiB: sameGpu ? s.memGiB : undefined });
   };
 
   const pin = () => {
@@ -276,7 +282,7 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
   const engineOptions: ChipOption[] = config.engines.map((e) => ({
     id: e.id,
     label: e.name,
-    sub: e.confidence === "high" ? undefined : "profil à compléter",
+    sub: e.confidence === "high" ? undefined : e.confidence === "medium" ? "partiellement vérifié" : "profil à compléter",
     warn: e.confidence !== "high",
     title: [e.description, ...e.notes].filter(Boolean).join("\n"),
   }));
@@ -332,7 +338,7 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
         prefillSeconds: perf.prefillSeconds,
       },
       issues,
-      command,
+      command: command?.text ?? null,
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -550,8 +556,13 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
             />
             <Kpi
               title="Modèle + 1 KV"
-              value={fmtBytes(est.weights.totalBytes + est.kv.perRequestBytes)}
-              sub={`${est.fitsOneRequest ? "✓ tient" : "✕ ne tient pas"} dans ${fmtBytes(est.memory.usablePerGpuBytes * s.gpuCount)} utilisables`}
+              value={fmtBytes(est.physicalOneRequestBytes)}
+              sub={[
+                est.physicalOneRequestBytes > est.modelPlusOneKvBytes * 1.001 ? `occupation réelle · somme logique ${fmtBytes(est.modelPlusOneKvBytes)}` : null,
+                `${est.fitsOneRequest ? "✓ tient" : "✕ ne tient pas"} (${s.gpuCount > 1 ? `GPU le plus chargé : ${fmtBytes(est.weights.perGpuBytes + est.kv.perRequestPerGpuBytes)} / ${fmtBytes(est.memory.usablePerGpuBytes)}` : `${fmtBytes(est.memory.usablePerGpuBytes)} utilisables`})`,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
               tone={est.fitsOneRequest ? "good" : "bad"}
             />
             <Kpi
@@ -601,8 +612,8 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
                   <SessionsChart rows={byContext} current={ctx} maxNative={model.maxContext} maxExt={maxCtx} onPick={(t) => update({ ctx: t })} />
                   {command && (
                     <>
-                      <h3>Commande indicative</h3>
-                      <pre className="yaml">{command}</pre>
+                      <h3>Commande indicative{command.matchesScenario ? "" : " (checkpoint à fournir)"}</h3>
+                      <pre className="yaml">{command.text}</pre>
                     </>
                   )}
                   {engine.notes.length > 0 && (

@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
 import { parseConfigFile } from "./load-config";
-import { collectIssues, CONTEXT_STEPS, estimate, GIB, type EstimateInput } from "./calc";
+import { collectIssues, CONTEXT_STEPS, estimate, GIB, kvSupport, memoryFormatFor, weightSupport, type EstimateInput } from "./calc";
 import { estimatePerf } from "./perf";
-import { defaultTp, gpuCountOptions, maxContextFor, sizeForTarget } from "./planning";
+import { defaultTp, gpuCountOptions, maxContextFor, pickKvFormat, pickWeightFormat, sizeForTarget } from "./planning";
+import { launchCommand } from "./scenario";
 import type { AppConfig } from "./config-schema";
 
 const load = async (): Promise<AppConfig> => {
@@ -79,13 +80,14 @@ describe("estimate", async () => {
     const dp = estimate(input(cfg, { model: "kimi-k2-instruct", gpu: "b200", wf: "fp8", gpuCount: 8, mode: "dp-ep" }));
     expect(dp.kv.perRequestClusterBytes).toBe(dp.kv.perRequestBytes);
     expect(dp.weights.perGpuBytes).toBeGreaterThan(tp.weights.perGpuBytes);
-    expect(dp.sessions).toBeGreaterThan(tp.sessions * 6);
+    expect(dp.sessions).toBeGreaterThan(tp.sessions * 4);
   });
 
-  it("TP × PP : PP=2 divise le KV par GPU sans réplication", () => {
+  it("TP × PP : couches entières, rang le plus chargé (61 couches sur 2 étages → 31)", () => {
     const e = estimate(input(cfg, { model: "kimi-k2-instruct", gpu: "b200", wf: "fp8", gpuCount: 16, tp: 8 }));
     expect(e.pp).toBe(2);
-    expect(e.kv.perRequestPerGpuBytes).toBe(e.kv.perRequestBytes / 2);
+    expect(e.layersPerStage).toBe(31);
+    expect(e.kv.perRequestPerGpuBytes).toBeCloseTo((e.kv.perRequestBytes * 31) / 61, 0);
   });
 
   it("fenêtre glissante : plafonnée dans vLLM, comptée en entier si la libération des blocs n'est pas vérifiée", () => {
@@ -147,6 +149,103 @@ describe("estimate", async () => {
   });
 });
 
+describe("profils moteur", async () => {
+  const cfg = await load();
+  const zml = find(cfg.engines, "zml");
+  const h100 = find(cfg.gpus, "h100");
+
+  it("ZML / LLMD : INT4 et KV FP8 non supportés, FP8 non vérifié, replis automatiques", () => {
+    expect(weightSupport(h100, zml, "int4").level).toBe("unsupported");
+    expect(weightSupport(h100, zml, "fp8").level).toBe("unverified");
+    expect(kvSupport(h100, zml, "fp8").level).toBe("unsupported");
+    expect(pickKvFormat(cfg, h100, zml, "fp8")).toBe("bf16");
+    expect(pickWeightFormat(cfg, find(cfg.models, "qwen3-32b"), h100, zml, "int4")).toBe("bf16");
+  });
+
+  it("format non vérifié : calcul au format du fichier, alternative BF16 signalée", () => {
+    const i = input(cfg, { engine: "zml", wf: "fp8" });
+    const issues = collectIssues(i, estimate(i), cfg.weightFormats);
+    expect(issues.some((x) => x.title.startsWith("Format en mémoire non vérifié pour FP8"))).toBe(true);
+  });
+
+  it("format en mémoire distinct du fichier : la VRAM suit le format chargé", () => {
+    const eng = { ...zml, weightFormats: { ...zml.weightFormats, fp8: { level: "native" as const, memoryFormat: "bf16" } } };
+    const fp8 = find(cfg.weightFormats, "fp8");
+    const mem = memoryFormatFor(cfg.weightFormats, h100, eng, fp8);
+    expect(mem.id).toBe("bf16");
+    const i = { ...input(cfg, { wf: "fp8" }), engine: eng, memoryWeightFormat: mem };
+    const e = estimate(i);
+    expect(e.weights.totalBytes).toBeCloseTo(32.76e9 * 2, -6);
+    expect(collectIssues(i, e, cfg.weightFormats).some((x) => x.title === "Fichier FP8 chargé en BF16 en mémoire")).toBe(true);
+  });
+
+  it("fenêtre glissante : économie seulement si la libération des blocs est confirmée", () => {
+    const i = input(cfg, { model: "gemma-3-27b", contextTokens: 131072, engine: "zml" });
+    const issues = collectIssues(i, estimate(i), cfg.weightFormats);
+    expect(issues.some((x) => x.title.includes("comptées au contexte complet"))).toBe(true);
+    const off = { ...input(cfg, { model: "gemma-3-27b" }), engine: { ...zml, features: { ...zml.features, slidingWindowAttention: false as const } } };
+    expect(collectIssues(off, estimate(off), cfg.weightFormats)[0].title).toMatch(/Attention glissante non supportée/);
+  });
+});
+
+describe("review e00a496", async () => {
+  const cfg = await load();
+
+  it("P1 contexte : pas de recommandation au-delà du contexte maximal du modèle", () => {
+    const i = input(cfg, { model: "qwen3-8b", gpu: "h200", gpuCount: 8, kf: "fp8", contextTokens: 1048576 });
+    expect(collectIssues(i, estimate(i), cfg.weightFormats).some((x) => x.severity === "error" && x.title.startsWith("Contexte"))).toBe(true);
+    expect(maxContextFor(cfg, i, 1)).toBe(131072);
+    const rows = sizeForTarget(cfg, { ...i, weightFormatId: "bf16", kvFormatId: "fp8" }, 1, "h200");
+    expect(rows.every((r) => r.gpuCount === null)).toBe(true);
+    expect(rows[0].note).toContain("contexte hors limite");
+  });
+
+  it("P1 VRAM personnalisée : appliquée à la seule carte saisie", () => {
+    const base = input(cfg, { model: "qwen3-8b", gpu: "h200", memoryGiBOverride: 140 });
+    const withOv = sizeForTarget(cfg, { ...base, weightFormatId: "bf16", kvFormatId: "bf16" }, 20, "h200");
+    const without = sizeForTarget(cfg, { ...base, memoryGiBOverride: undefined, weightFormatId: "bf16", kvFormatId: "bf16" }, 20, "h200");
+    for (const id of ["v100", "l40s"]) {
+      const a = withOv.find((r) => r.gpu.id === id)!;
+      const b = without.find((r) => r.gpu.id === id)!;
+      expect([a.gpuCount, a.sessions]).toEqual([b.gpuCount, b.sessions]);
+      expect(a.gpuCount).not.toBe(1);
+    }
+  });
+
+  it("P1 PP : refus au-delà du nombre de couches, rang limitant sinon", () => {
+    const i = input(cfg, { model: "qwen3-8b", gpu: "gb200", gpuCount: 72, tp: 1 });
+    expect(collectIssues(i, estimate(i), cfg.weightFormats).some((x) => x.severity === "error" && x.title.startsWith("PP=72 supérieur"))).toBe(true);
+    const e = estimate(input(cfg, { model: "qwen3-8b", gpuCount: 8, tp: 1 }));
+    expect(e.layersPerStage).toBe(5);
+    expect(e.kv.perRequestPerGpuBytes).toBe((e.kv.perRequestBytes * 5) / 36);
+  });
+
+  it("P1 DP-attention : tensors non experts répliqués à leur précision réelle", () => {
+    const e = estimate(input(cfg, { model: "kimi-k2.5", gpu: "b300", wf: "int4", gpuCount: 8, mode: "dp-ep" }));
+    // Attention seule en BF16 : 6,2 B × 2 o ≈ 11,55 Gio ; tout le non-expert dépasse cette valeur.
+    expect(e.weights.nonExpertBytes / GIB).toBeGreaterThan(11.55);
+    expect(e.weights.perGpuBytes).toBeCloseTo(e.weights.nonExpertBytes + (e.weights.totalBytes - e.weights.nonExpertBytes) / 8, 0);
+    const unknown = input(cfg, { model: "kimi-linear", gpuCount: 4, mode: "dp-ep" });
+    expect(collectIssues(unknown, estimate(unknown), cfg.weightFormats).some((x) => x.severity === "error" && x.title.includes("experts inconnus"))).toBe(true);
+  });
+
+  it("P2 commande : checkpoint à fournir hors format natif", () => {
+    const i = input(cfg, { model: "qwen3-8b", wf: "nvfp4", gpu: "b200" });
+    const c = launchCommand(i, 1, 1)!;
+    expect(c.matchesScenario).toBe(false);
+    expect(c.text).toContain("<checkpoint-nvfp4-de-qwen3-8b>");
+    expect(c.text).not.toMatch(/vllm serve Qwen\/Qwen3-8B/);
+    expect(launchCommand(input(cfg, { model: "qwen3-8b" }), 1, 1)!.text).toContain("vllm serve Qwen/Qwen3-8B ");
+    expect(launchCommand(input(cfg, { model: "qwen3-8b", wf: "int4" }), 1, 1)!.text).toContain("vllm serve Qwen/Qwen3-8B-AWQ");
+  });
+
+  it("P2 modèle + 1 KV : occupation physique avec réplication MLA", () => {
+    const e = estimate(input(cfg, { model: "kimi-k2-instruct", gpu: "b200", wf: "fp8", gpuCount: 8 }));
+    expect(e.physicalOneRequestBytes).toBeCloseTo(e.weights.totalBytes + 8 * e.kv.perRequestBytes, 0);
+    expect(e.physicalOneRequestBytes).toBeGreaterThan(e.modelPlusOneKvBytes);
+  });
+});
+
 describe("performance", async () => {
   const cfg = await load();
   it("décodage limité par la mémoire : ~ bande passante / octets lus", () => {
@@ -188,7 +287,7 @@ describe("planification", async () => {
   });
   it("contexte max pour N sessions", () => {
     const i = input(cfg, { gpuCount: 2 });
-    const c = maxContextFor(i, 4);
+    const c = maxContextFor(cfg, i, 4);
     expect(c).not.toBeNull();
     expect(estimate({ ...i, contextTokens: c! }).sessions).toBeGreaterThanOrEqual(4);
   });
