@@ -1,9 +1,11 @@
 import type {
+  EngineSpec,
   GpuSpec,
   KvFormat,
   LayerGroup,
   ModelSpec,
   Support,
+  SupportLevel,
   WeightFormat,
 } from "./config-schema";
 
@@ -13,27 +15,30 @@ export const GIB = 1024 ** 3;
 export const CONTEXT_STEPS = [8, 16, 32, 64, 128, 256, 512, 1024].map((k) => k * 1024);
 
 export function contextLabel(tokens: number): string {
-  return tokens >= 1024 * 1024 ? `${tokens / (1024 * 1024)}M` : `${Math.round(tokens / 1024)}k`;
+  if (tokens >= 1024 * 1024) return `${+(tokens / (1024 * 1024)).toFixed(1)}M`;
+  return `${Math.round(tokens / 1024)}k`;
 }
 
-export type Parallelism = "tp" | "pp" | "dp-attention";
-
-export const PARALLELISM_LABELS: Record<Parallelism, string> = {
-  tp: "Tensor parallel (TP)",
-  pp: "Pipeline parallel (PP)",
-  "dp-attention": "DP-attention + EP",
-};
+/** tp-pp : TP dans un étage, PP entre étages (tp = n → TP pur, tp = 1 → PP pur). dp-ep : DP-attention + expert parallel. */
+export type ParallelMode = "tp-pp" | "dp-ep";
 
 export interface EstimateInput {
   model: ModelSpec;
   gpu: GpuSpec;
+  engine: EngineSpec;
   gpuCount: number;
+  mode: ParallelMode;
+  /** Degré de TP (mode tp-pp) ; PP = gpuCount / tp. */
+  tp: number;
   contextTokens: number;
   weightFormat: WeightFormat;
   kvFormat: KvFormat;
   /** Part de la mémoire de chaque GPU laissée aux activations, graphes CUDA, fragmentation. */
   reservePct: number;
-  parallelism: Parallelism;
+  /** Mémoire visible par GPU si différente du catalogue (nvidia-smi). */
+  memoryGiBOverride?: number;
+  /** Mémoire CPU dédiée au déchargement du KV, par GPU. */
+  offloadGiBPerGpu?: number;
 }
 
 export type Severity = "error" | "warning" | "info";
@@ -50,8 +55,6 @@ export interface GroupBreakdown {
   detail: string;
   /** Octets pour une requête au contexte demandé (vue logique, sans réplication). */
   bytes: number;
-  /** Tokens effectivement stockés par couche (fenêtre glissante, état constant). */
-  storedTokens: number | null;
   /** Octets stockés sur un GPU pour une requête, selon le parallélisme. */
   perGpuBytes: number;
   /** Facteur de réplication du cache entre GPUs (1 = pas de duplication). */
@@ -59,11 +62,15 @@ export interface GroupBreakdown {
 }
 
 export interface Estimate {
+  tp: number;
+  pp: number;
   weights: {
+    bitsPerParam: number;
     totalBytes: number;
     perGpuBytes: number;
     quantizedParams: number;
     unquantizedParams: number;
+    attentionBytes: number;
     replicatedAttentionBytes: number;
   };
   kv: {
@@ -71,7 +78,7 @@ export interface Estimate {
     perRequestBytes: number;
     /** Mémoire réellement consommée par une requête sur l'ensemble des GPUs. */
     perRequestClusterBytes: number;
-    /** Mémoire consommée par une requête sur le GPU le plus chargé. */
+    /** Mémoire consommée par une requête sur le GPU qui l'héberge. */
     perRequestPerGpuBytes: number;
     perTokenBytes: number;
     constantBytes: number;
@@ -84,33 +91,55 @@ export interface Estimate {
     freeForKvPerGpuBytes: number;
     freeForKvTotalBytes: number;
   };
-  /** Poids + une requête (vue logique). */
+  offload: {
+    totalBytes: number;
+    /** Sessions supplémentaires pouvant être gardées en mémoire CPU (préemptées / en attente). */
+    parkedSessions: number;
+    /** Temps de rechargement d'une session complète vers le GPU, ms. */
+    reloadMs: number;
+  };
   modelPlusOneKvBytes: number;
   fitsOneRequest: boolean;
   fitsWeights: boolean;
   sessions: number;
+  sessionsPerGpu: number;
 }
 
-export function supportOf(map: Record<string, Support>, id: string): Support {
-  return map[id] ?? { level: "unsupported" };
+const LEVEL_ORDER: Record<SupportLevel, number> = { native: 0, limited: 1, unsupported: 2 };
+
+export function supportOf(map: Record<string, Support>, id: string, missing: SupportLevel = "unsupported"): Support {
+  return map[id] ?? { level: missing };
 }
+
+/** Support combiné GPU × moteur : le plus restrictif l'emporte, les notes sont cumulées. */
+export function combinedSupport(gpuMap: Record<string, Support>, engineMap: Record<string, Support>, id: string, engineName: string): Support {
+  const g = supportOf(gpuMap, id);
+  const e = supportOf(engineMap, id);
+  const level = LEVEL_ORDER[g.level] >= LEVEL_ORDER[e.level] ? g.level : e.level;
+  const notes = [g.note, e.level === "unsupported" && !e.note ? `Non supporté par ${engineName}.` : e.note].filter(Boolean);
+  return { level, note: notes.length ? notes.join(" ") : undefined };
+}
+
+export const weightSupport = (gpu: GpuSpec, engine: EngineSpec, id: string) =>
+  combinedSupport(gpu.weightFormats, engine.weightFormats, id, engine.name);
+export const kvSupport = (gpu: GpuSpec, engine: EngineSpec, id: string) =>
+  combinedSupport(gpu.kvCacheFormats, engine.kvCacheFormats, id, engine.name);
 
 export function embeddingParams(m: ModelSpec): number {
   return m.vocabSize * m.hiddenSize * (m.tiedEmbeddings ? 1 : 2);
 }
 
+export function effectiveBits(m: ModelSpec, f: WeightFormat): number {
+  return f.id === m.nativeWeightFormat && m.nativeBitsPerParam ? m.nativeBitsPerParam : f.bitsPerParam;
+}
+
 /** Les embeddings / lm_head (et l'encodeur vision) restent en 16 bits quand on quantifie. */
 export function weightBytes(m: ModelSpec, f: WeightFormat) {
+  const bits = effectiveBits(m, f);
   const total = m.paramsB * 1e9;
-  if (f.bitsPerParam >= 16) {
-    return { bytes: (total * f.bitsPerParam) / 8, quantized: total, unquantized: 0 };
-  }
+  if (bits >= 16) return { bytes: (total * bits) / 8, quantized: total, unquantized: 0, bits };
   const keep = Math.min(total, embeddingParams(m) + m.extraUnquantizedParamsB * 1e9);
-  return {
-    bytes: ((total - keep) * f.bitsPerParam) / 8 + keep * 2,
-    quantized: total - keep,
-    unquantized: keep,
-  };
+  return { bytes: ((total - keep) * bits) / 8 + keep * 2, quantized: total - keep, unquantized: keep, bits };
 }
 
 /** Paramètres d'attention (Q, K, V, O) : valeur du fichier ou estimation à partir des couches GQA. */
@@ -132,6 +161,10 @@ export function isMoE(m: ModelSpec): boolean {
   return m.activeParamsB !== undefined && m.activeParamsB < m.paramsB * 0.8;
 }
 
+export function totalLayers(m: ModelSpec): number {
+  return m.layers.reduce((a, g) => a + g.count, 0);
+}
+
 function groupLabel(g: LayerGroup): string {
   switch (g.kind) {
     case "full":
@@ -145,40 +178,54 @@ function groupLabel(g: LayerGroup): string {
   }
 }
 
-function slidingLabel(window: number): string {
+export function windowLabel(window: number): string {
   return window < 1024 ? `${window} tok.` : contextLabel(window);
 }
 
-/** Partage du cache d'un groupe de couches entre GPUs. */
-function sharding(g: LayerGroup, n: number, par: Parallelism): { perGpu: number; replication: number } {
-  if (n === 1 || par === "dp-attention") return { perGpu: 1, replication: 1 };
-  if (par === "pp") return { perGpu: 1 / n, replication: 1 };
+/** Tokens retenus par une couche à fenêtre glissante, selon le moteur. */
+export function storedTokens(g: LayerGroup, ctx: number, engine: EngineSpec): number {
+  if (g.kind === "sliding" && engine.features.slidingWindowOptimized) return Math.min(ctx, g.window);
+  return ctx;
+}
+
+/** Partage du cache d'un groupe de couches entre GPUs en TP. */
+function tpSharding(g: LayerGroup, tp: number): { perGpu: number; replication: number } {
+  if (tp === 1) return { perGpu: 1, replication: 1 };
   switch (g.kind) {
     case "full":
     case "sliding": {
-      const headsPerGpu = Math.ceil(g.kvHeads / n);
-      return { perGpu: headsPerGpu / g.kvHeads, replication: (headsPerGpu * n) / g.kvHeads };
+      const headsPerGpu = Math.ceil(g.kvHeads / tp);
+      return { perGpu: headsPerGpu / g.kvHeads, replication: (headsPerGpu * tp) / g.kvHeads };
     }
     case "mla":
       // Le latent MLA n'a pas de dimension "tête" : chaque rang TP garde tout le cache.
-      return { perGpu: 1, replication: n };
+      return { perGpu: 1, replication: tp };
     case "linear":
-      return { perGpu: 1 / n, replication: 1 };
+      return { perGpu: 1 / tp, replication: 1 };
   }
 }
 
+/** Degré de TP compatible avec les têtes du modèle (contraintes vLLM). */
+export function isValidTp(m: ModelSpec, tp: number): boolean {
+  if (tp === 1) return true;
+  if (m.attentionHeads % tp !== 0) return false;
+  return m.layers.every((g) => (g.kind !== "full" && g.kind !== "sliding") || g.kvHeads % tp === 0 || tp % g.kvHeads === 0);
+}
+
 export function estimate(input: EstimateInput): Estimate {
-  const { model: m, gpu, gpuCount: n, contextTokens: ctx, weightFormat, kvFormat, parallelism } = input;
+  const { model: m, gpu, engine, gpuCount: n, contextTokens: ctx, weightFormat, kvFormat, mode } = input;
+  const tp = mode === "dp-ep" ? 1 : input.tp;
+  const pp = mode === "dp-ep" ? 1 : Math.max(1, Math.round(n / tp));
   const kvB = kvFormat.bytesPerElement;
 
   // --- Poids
   const w = weightBytes(m, weightFormat);
+  const attentionBytes = Math.min(w.bytes, (attentionParams(m) * w.bits) / 8);
   let weightsPerGpu = w.bytes / n;
   let replicatedAttentionBytes = 0;
-  if (parallelism === "dp-attention" && n > 1) {
-    const attnBytes = Math.min(w.bytes, (attentionParams(m) * weightFormat.bitsPerParam) / 8);
-    weightsPerGpu = attnBytes + (w.bytes - attnBytes) / n;
-    replicatedAttentionBytes = attnBytes * (n - 1);
+  if (mode === "dp-ep" && n > 1) {
+    weightsPerGpu = attentionBytes + (w.bytes - attentionBytes) / n;
+    replicatedAttentionBytes = attentionBytes * (n - 1);
   }
 
   // --- KV par requête
@@ -187,69 +234,74 @@ export function estimate(input: EstimateInput): Estimate {
   let constantBytes = 0;
   for (const g of m.layers) {
     let bytes: number;
-    let storedTokens: number | null;
     let detail: string;
     switch (g.kind) {
       case "full":
       case "sliding": {
         const dv = g.headDimV ?? g.headDim;
-        const tokens = g.kind === "sliding" ? Math.min(ctx, g.window) : ctx;
+        const tokens = storedTokens(g, ctx, engine);
         const perTok = g.kvHeads * (g.headDim + dv) * kvB + (g.extraBytesPerToken ?? 0);
         bytes = g.count * perTok * tokens;
-        storedTokens = tokens;
-        if (g.kind === "full") perTokenBytes += g.count * perTok;
-        detail = `${g.kvHeads} têtes KV × (${g.headDim}+${dv})${g.kind === "sliding" ? ` · fenêtre ${slidingLabel(g.window)}` : ""}`;
+        if (tokens === ctx) perTokenBytes += g.count * perTok;
+        detail = `${g.kvHeads} têtes KV × (${g.headDim}+${dv})`;
+        if (g.kind === "sliding")
+          detail += engine.features.slidingWindowOptimized ? ` · fenêtre ${windowLabel(g.window)}` : ` · fenêtre ${windowLabel(g.window)} non exploitée`;
         break;
       }
       case "mla": {
         const perTok = (g.kvLoraRank + g.ropeHeadDim) * kvB + (g.extraBytesPerToken ?? 0);
         bytes = g.count * perTok * ctx;
-        storedTokens = ctx;
         perTokenBytes += g.count * perTok;
-        detail = `latent ${g.kvLoraRank} + RoPE ${g.ropeHeadDim}${g.extraBytesPerToken ? ` + ${g.extraBytesPerToken} o/tok (indexeur)` : ""}`;
+        detail = `latent ${g.kvLoraRank}${g.ropeHeadDim ? ` + RoPE ${g.ropeHeadDim}` : " (NoPE)"}${g.extraBytesPerToken ? ` + ${g.extraBytesPerToken} o/tok (indexeur)` : ""}`;
         break;
       }
       case "linear": {
-        bytes = g.count * g.stateElements * m.stateBytesPerElement;
-        storedTokens = null;
+        bytes = g.count * (g.ssmElements * m.ssmStateBytes + g.convElements * m.convStateBytes);
         constantBytes += bytes;
-        detail = `${(g.stateElements / 1e6).toFixed(2)} M éléments/couche · ${m.stateBytesPerElement} o/élément`;
+        detail = `état ${(g.ssmElements / 1e6).toFixed(2)} M × ${m.ssmStateBytes} o${g.convElements ? ` + conv ${(g.convElements / 1e3).toFixed(0)} k × ${m.convStateBytes} o` : ""}`;
         break;
       }
     }
-    const s = sharding(g, n, parallelism);
+    const s = mode === "dp-ep" || n === 1 ? { perGpu: 1, replication: 1 } : tpSharding(g, tp);
     groups.push({
       kind: g.kind,
       label: groupLabel(g),
       count: g.count,
       detail,
       bytes,
-      storedTokens,
-      perGpuBytes: bytes * s.perGpu,
+      perGpuBytes: (bytes * s.perGpu) / pp,
       replication: s.replication,
     });
   }
   const perRequestBytes = groups.reduce((a, g) => a + g.bytes, 0);
   const perRequestPerGpuBytes = groups.reduce((a, g) => a + g.perGpuBytes, 0);
-  const perRequestClusterBytes =
-    parallelism === "dp-attention" || n === 1 ? perRequestBytes : perRequestPerGpuBytes * n;
+  const perRequestClusterBytes = mode === "dp-ep" || n === 1 ? perRequestBytes : perRequestPerGpuBytes * n;
 
   // --- Mémoire
-  const gpuBytes = gpu.memoryGiB * GIB;
+  const gpuBytes = (input.memoryGiBOverride ?? gpu.memoryGiB) * GIB;
   const reservePerGpuBytes = gpuBytes * (input.reservePct / 100);
   const usablePerGpuBytes = gpuBytes - reservePerGpuBytes;
   const freeForKvPerGpuBytes = Math.max(0, usablePerGpuBytes - weightsPerGpu);
   const fitsWeights = weightsPerGpu <= usablePerGpuBytes;
 
   const sessionsPerGpu = perRequestPerGpuBytes > 0 ? Math.floor(freeForKvPerGpuBytes / perRequestPerGpuBytes) : 0;
-  const sessions = parallelism === "dp-attention" ? sessionsPerGpu * n : sessionsPerGpu;
+  const sessions = mode === "dp-ep" ? sessionsPerGpu * n : sessionsPerGpu;
+
+  // --- Offload CPU
+  const offloadTotal = engine.features.kvOffload ? (input.offloadGiBPerGpu ?? 0) * GIB * n : 0;
+  const parkedSessions = perRequestClusterBytes > 0 ? Math.floor(offloadTotal / perRequestClusterBytes) : 0;
+  const reloadMs = (perRequestPerGpuBytes / (gpu.hostLinkGBs * 1e9)) * 1000;
 
   return {
+    tp,
+    pp,
     weights: {
+      bitsPerParam: w.bits,
       totalBytes: w.bytes,
       perGpuBytes: weightsPerGpu,
       quantizedParams: w.quantized,
       unquantizedParams: w.unquantized,
+      attentionBytes,
       replicatedAttentionBytes,
     },
     kv: { perRequestBytes, perRequestClusterBytes, perRequestPerGpuBytes, perTokenBytes, constantBytes, groups },
@@ -260,77 +312,80 @@ export function estimate(input: EstimateInput): Estimate {
       freeForKvPerGpuBytes,
       freeForKvTotalBytes: freeForKvPerGpuBytes * n,
     },
+    offload: { totalBytes: offloadTotal, parkedSessions, reloadMs },
     modelPlusOneKvBytes: w.bytes + perRequestBytes,
     fitsWeights,
     fitsOneRequest: fitsWeights && sessions >= 1,
     sessions,
+    sessionsPerGpu,
   };
 }
 
-const LEVEL_FR: Record<Support["level"], string> = {
+const LEVEL_FR: Record<SupportLevel, string> = {
   native: "natif",
   limited: "limité",
   unsupported: "non supporté",
 };
-export const supportLevelLabel = (l: Support["level"]) => LEVEL_FR[l];
+export const supportLevelLabel = (l: SupportLevel) => LEVEL_FR[l];
+
+const gibText = (b: number) =>
+  b >= GIB ? `${(b / GIB).toFixed(1).replace(".", ",")} Gio` : `${Math.round(b / 1024 ** 2)} Mio`;
 
 /** Liste des limitations / avertissements pour une configuration. */
 export function collectIssues(input: EstimateInput, est: Estimate, weightFormats: WeightFormat[]): Issue[] {
-  const { model: m, gpu, gpuCount: n, contextTokens: ctx, weightFormat: wf, kvFormat: kf, parallelism } = input;
+  const { model: m, gpu, engine, gpuCount: n, contextTokens: ctx, weightFormat: wf, kvFormat: kf, mode } = input;
+  const { tp, pp } = est;
   const out: Issue[] = [];
-  const gib = (b: number) =>
-    b >= GIB ? `${(b / GIB).toFixed(1).replace(".", ",")} Gio` : `${Math.round(b / 1024 ** 2)} Mio`;
 
   // --- Capacité
   if (!est.fitsWeights) {
     out.push({
       severity: "error",
       title: "Les poids ne tiennent pas en mémoire",
-      detail: `${gib(est.weights.perGpuBytes)} de poids par GPU pour ${gib(est.memory.usablePerGpuBytes)} utilisables. Ajoutez des GPUs, quantifiez davantage ou réduisez la réserve.`,
+      detail: `${gibText(est.weights.perGpuBytes)} de poids par GPU pour ${gibText(est.memory.usablePerGpuBytes)} utilisables. Ajoutez des GPUs, quantifiez davantage ou réduisez la réserve.`,
     });
   } else if (est.sessions < 1) {
     out.push({
       severity: "error",
       title: "Pas assez de mémoire pour une seule requête à ce contexte",
-      detail: `Il reste ${gib(est.memory.freeForKvPerGpuBytes)} par GPU, et une requête en demande ${gib(est.kv.perRequestPerGpuBytes)} par GPU.`,
+      detail: `Il reste ${gibText(est.memory.freeForKvPerGpuBytes)} par GPU, et une requête en demande ${gibText(est.kv.perRequestPerGpuBytes)} par GPU.`,
     });
   }
 
-  // --- Formats vs GPU
-  const ws = supportOf(gpu.weightFormats, wf.id);
-  if (ws.level !== "native")
+  // --- Moteur
+  const eg = engine.gpus[gpu.id];
+  if (eg && eg.level !== "native")
     out.push({
-      severity: ws.level === "unsupported" ? "error" : "warning",
-      title: `Poids ${wf.label} : ${LEVEL_FR[ws.level]} sur ${gpu.name}`,
-      detail: ws.note,
+      severity: eg.level === "unsupported" ? "error" : "warning",
+      title: `${engine.name} sur ${gpu.name} : ${LEVEL_FR[eg.level]}`,
+      detail: eg.note,
     });
-  else if (ws.note) out.push({ severity: "info", title: `Poids ${wf.label} sur ${gpu.name}`, detail: ws.note });
+  if (engine.confidence !== "high")
+    out.push({ severity: "warning", title: `Profil ${engine.name} non vérifié`, detail: engine.notes[0] });
 
-  const ks = supportOf(gpu.kvCacheFormats, kf.id);
+  // --- Formats vs GPU et moteur
+  const ws = weightSupport(gpu, engine, wf.id);
+  if (ws.level !== "native")
+    out.push({ severity: ws.level === "unsupported" ? "error" : "warning", title: `Poids ${wf.label} : ${LEVEL_FR[ws.level]}`, detail: ws.note });
+  else if (ws.note) out.push({ severity: "info", title: `Poids ${wf.label}`, detail: ws.note });
+
+  const ks = kvSupport(gpu, engine, kf.id);
   if (ks.level !== "native")
-    out.push({
-      severity: ks.level === "unsupported" ? "error" : "warning",
-      title: `KV cache ${kf.label} : ${LEVEL_FR[ks.level]} sur ${gpu.name}`,
-      detail: ks.note,
-    });
-  else if (ks.note) out.push({ severity: "info", title: `KV cache ${kf.label} sur ${gpu.name}`, detail: ks.note });
+    out.push({ severity: ks.level === "unsupported" ? "error" : "warning", title: `KV cache ${kf.label} : ${LEVEL_FR[ks.level]}`, detail: ks.note });
+  else if (ks.note) out.push({ severity: "info", title: `KV cache ${kf.label}`, detail: ks.note });
 
   // --- Formats vs modèle
-  const native = input.model.nativeWeightFormat;
+  const native = m.nativeWeightFormat;
   const wNote = m.weightFormatNotes[wf.id];
-  if (wNote)
-    out.push({
-      severity: wNote.level === "unsupported" ? "error" : wNote.level,
-      title: `${m.name} en ${wf.label}`,
-      detail: wNote.note,
-    });
-  const nativeFmtBits = weightFormats.find((f) => f.id === native)?.bitsPerParam;
+  if (wNote) out.push({ severity: wNote.level === "unsupported" ? "error" : wNote.level, title: `${m.name} en ${wf.label}`, detail: wNote.note });
+  const nativeFmt = weightFormats.find((f) => f.id === native);
+  const nativeFmtBits = nativeFmt ? effectiveBits(m, nativeFmt) : undefined;
   // Même largeur (ex. BF16 → FP16) : simple conversion, pas de quantification.
   if (wf.id !== native && nativeFmtBits !== wf.bitsPerParam) {
     if (nativeFmtBits !== undefined && wf.bitsPerParam > nativeFmtBits)
       out.push({
         severity: "info",
-        title: `Poids publiés nativement en ${native.toUpperCase()}`,
+        title: `Poids publiés nativement en ${nativeFmt?.label ?? native}`,
         detail: `Charger en ${wf.label} augmente la mémoire sans gain de qualité.`,
       });
     else if (!m.officialWeightFormats.includes(wf.id))
@@ -341,12 +396,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       });
   }
   const kNote = m.kvFormatNotes[kf.id];
-  if (kNote)
-    out.push({
-      severity: kNote.level === "unsupported" ? "error" : kNote.level,
-      title: `KV ${kf.label} avec ${m.name}`,
-      detail: kNote.note,
-    });
+  if (kNote) out.push({ severity: kNote.level === "unsupported" ? "error" : kNote.level, title: `KV ${kf.label} avec ${m.name}`, detail: kNote.note });
 
   // --- Contexte
   if (ctx > m.maxContext) {
@@ -363,121 +413,113 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
         detail: "Le calcul reste indicatif : le modèle n'est pas prévu pour cette longueur.",
       });
   }
-  const sliding = m.layers.filter((g) => g.kind === "sliding");
+  const sliding = m.layers.filter((g): g is Extract<LayerGroup, { kind: "sliding" }> => g.kind === "sliding");
   if (sliding.length) {
     const cnt = sliding.reduce((a, g) => a + g.count, 0);
-    const win = Math.max(...sliding.map((g) => (g.kind === "sliding" ? g.window : 0)));
-    out.push({
-      severity: "info",
-      title: `${cnt} couches à fenêtre glissante (${slidingLabel(win)})`,
-      detail:
-        "Leur KV est plafonné à la fenêtre. Le moteur doit le gérer (gestionnaire hybride de vLLM ≥ 0.10, SGLang, TensorRT-LLM) ; sinon il alloue le contexte complet sur toutes les couches.",
-    });
+    const win = Math.max(...sliding.map((g) => g.window));
+    out.push(
+      engine.features.slidingWindowOptimized
+        ? { severity: "info", title: `${cnt} couches à fenêtre glissante (${windowLabel(win)})`, detail: `Leur KV est plafonné à la fenêtre (gestionnaire hybride de ${engine.name}).` }
+        : { severity: "warning", title: `${cnt} couches à fenêtre glissante comptées au contexte complet`, detail: `${engine.name} n'exploite pas la fenêtre dans ce profil : chaque couche réserve tout le contexte.` },
+    );
   }
   if (m.layers.some((g) => g.kind === "linear"))
     out.push({
       severity: "info",
       title: "Couches linéaires / SSM : état récurrent constant",
-      detail: `${gib(est.kv.constantBytes)} par requête quel que soit le contexte, stockés en ${m.stateBytesPerElement * 8} bits indépendamment du format KV choisi.`,
+      detail: `${gibText(est.kv.constantBytes)} par requête quel que soit le contexte (état en ${m.ssmStateBytes * 8} bits), indépendamment du format KV choisi.`,
     });
+  if (m.layers.some((g) => (g.kind === "mla" || g.kind === "full") && (g.extraBytesPerToken ?? 0) > 0))
+    out.push({ severity: "info", title: "Index d'attention parcimonieuse (DSA) inclus", detail: "Clés de l'indexeur stockées en FP8 + échelle, en plus du latent." });
 
   // --- Interconnexion
+  const linkName = (k: number) => (gpu.interconnect.nvlink && k <= gpu.nvlinkDomain ? "NVLink" : k <= gpu.maxGpusPerNode ? gpu.interconnect.label : "le réseau inter-nœuds");
   if (n > 1) {
-    if (!gpu.interconnect.nvlink)
+    if (mode === "tp-pp" && tp > 1 && !gpu.interconnect.nvlink)
       out.push({
         severity: "warning",
-        title: `Pas de NVLink sur ${gpu.name}`,
-        detail: `Communication inter-GPU via ${gpu.interconnect.label}. ${parallelism === "tp" ? "Le TP fait un all-reduce à chaque couche : débit et latence nettement dégradés. Préférez PP, ou plusieurs instances indépendantes." : "Le PP ne transfère que les activations entre étages : c'est le meilleur choix sans NVLink."}`,
+        title: `TP=${tp} sans NVLink sur ${gpu.name}`,
+        detail: `Le TP fait deux all-reduce par couche via ${gpu.interconnect.label} : débit et latence nettement dégradés. Préférez PP (TP=1), ou plusieurs instances indépendantes.`,
       });
-    else if (n > gpu.nvlinkDomain)
+    if (mode === "tp-pp" && tp > 1 && gpu.interconnect.nvlink && tp > gpu.nvlinkDomain)
       out.push({
         severity: "warning",
-        title: `${n} GPUs : au-delà du domaine NVLink (${gpu.nvlinkDomain})`,
-        detail: "Une partie des échanges passe par le réseau (InfiniBand/Ethernet). Réservez le TP au domaine NVLink et utilisez PP au-delà.",
+        title: `TP=${tp} dépasse le domaine NVLink (${gpu.nvlinkDomain})`,
+        detail: "Les all-reduce passent par le réseau. Gardez le TP dans le domaine NVLink et utilisez PP au-delà.",
       });
+    if (mode === "dp-ep" && n > Math.max(gpu.nvlinkDomain, 1) && n > gpu.maxGpusPerNode)
+      out.push({ severity: "info", title: "Expert parallel inter-nœuds", detail: "Les all-to-all MoE traversent le réseau : prévoyez un réseau RDMA rapide (InfiniBand / RoCE)." });
     if (n > gpu.maxGpusPerNode)
       out.push({
-        severity: "warning",
-        title: `${n} GPUs : plus d'un nœud (${gpu.maxGpusPerNode} GPU/nœud)`,
-        detail: "Déploiement multi-nœuds nécessaire.",
+        severity: n > gpu.nvlinkDomain ? "warning" : "info",
+        title: `${n} GPUs : ${Math.ceil(n / gpu.maxGpusPerNode)} nœuds de ${gpu.maxGpusPerNode} GPUs`,
+        detail: n <= gpu.nvlinkDomain ? `Tous dans le même domaine NVLink (${gpu.nvlinkDomain} GPUs).` : `Liaison entre nœuds par ${linkName(n)}.`,
       });
   }
 
   // --- Parallélisme
-  if (n > 1 && parallelism === "tp") {
-    if (m.attentionHeads % n !== 0)
+  if (n > 1 && mode === "tp-pp") {
+    if (tp > 1 && m.attentionHeads % tp !== 0)
       out.push({
         severity: "error",
-        title: `TP=${n} impossible : ${m.attentionHeads} têtes d'attention non divisibles par ${n}`,
-        detail: `Choisissez un nombre de GPUs diviseur de ${m.attentionHeads}, ou passez en PP (ou TP×PP).`,
+        title: `TP=${tp} impossible : ${m.attentionHeads} têtes d'attention non divisibles par ${tp}`,
+        detail: `Choisissez un degré de TP diviseur de ${m.attentionHeads} et complétez avec du PP.`,
       });
     for (const g of m.layers) {
       if (g.kind !== "full" && g.kind !== "sliding") continue;
-      if (g.kvHeads % n !== 0 && n % g.kvHeads !== 0)
-        out.push({
-          severity: "error",
-          title: `TP=${n} incompatible avec ${g.kvHeads} têtes KV`,
-          detail: "Le nombre de têtes KV doit être multiple ou diviseur du degré de TP.",
-        });
-      else if (n > g.kvHeads) {
+      if (tp > 1 && g.kvHeads % tp !== 0 && tp % g.kvHeads !== 0)
+        out.push({ severity: "error", title: `TP=${tp} incompatible avec ${g.kvHeads} têtes KV`, detail: "Le nombre de têtes KV doit être multiple ou diviseur du degré de TP." });
+      else if (tp > g.kvHeads) {
         out.push({
           severity: "warning",
-          title: `KV répliqué ×${n / g.kvHeads} (${g.kvHeads} têtes KV pour TP=${n})`,
-          detail: "Chaque tête KV est dupliquée sur plusieurs GPUs : la capacité en sessions n'augmente plus avec le nombre de GPUs. Envisagez TP plus petit + PP, ou DP-attention.",
+          title: `KV répliqué ×${tp / g.kvHeads} (${g.kvHeads} têtes KV pour TP=${tp})`,
+          detail: "Chaque tête KV est dupliquée sur plusieurs GPUs. Réduisez le TP et ajoutez du PP, ou passez en DP-attention.",
         });
         break;
       }
     }
-    if (m.layers.some((g) => g.kind === "mla"))
+    if (tp > 1 && m.layers.some((g) => g.kind === "mla"))
       out.push({
         severity: "warning",
-        title: `Cache MLA répliqué sur les ${n} GPUs en TP`,
-        detail:
-          "Chaque rang TP stocke le latent complet. En DP-attention (SGLang --enable-dp-attention, vLLM --data-parallel-size N --enable-expert-parallel), chaque GPU garde ses propres requêtes : capacité ≈ ×N.",
+        title: `Cache MLA répliqué sur les ${tp} GPUs du TP`,
+        detail: `Chaque rang TP stocke le latent complet. En DP-attention${engine.flags.dpAttention ? ` (${engine.flags.dpAttention})` : ""}, chaque GPU garde ses propres requêtes : capacité ≈ ×${tp}.`,
       });
+    if (pp > 1) {
+      if (totalLayers(m) % pp !== 0)
+        out.push({ severity: "info", title: `PP=${pp} : ${totalLayers(m)} couches à cache non divisibles par ${pp}`, detail: "Répartition inégale : le GPU le plus chargé limite la capacité (calcul sur une moyenne)." });
+      if (n % tp !== 0) out.push({ severity: "error", title: `${n} GPUs non divisibles par TP=${tp}`, detail: "TP × PP doit être égal au nombre de GPUs." });
+    }
   }
-  if (n > 1 && parallelism === "pp") {
-    const layers = m.layers.reduce((a, g) => a + g.count, 0);
-    if (layers % n !== 0)
-      out.push({
-        severity: "info",
-        title: `PP=${n} : ${layers} couches non divisibles par ${n}`,
-        detail: "Répartition inégale : le GPU le plus chargé limite la capacité (calcul ici sur une moyenne).",
-      });
-    out.push({
-      severity: "info",
-      title: "Pipeline parallel",
-      detail: "Pas de duplication du KV, mais la latence par token n'est pas réduite et il faut plusieurs requêtes en vol pour occuper tous les étages.",
-    });
-  }
-  if (parallelism === "dp-attention") {
+  if (mode === "dp-ep") {
+    if (!engine.features.dpAttention)
+      out.push({ severity: "error", title: `DP-attention indisponible dans ${engine.name}`, detail: "Choisissez TP/PP." });
     if (!isMoE(m))
-      out.push({
-        severity: "warning",
-        title: "DP-attention conçu pour les MoE",
-        detail: "Sur un modèle dense, cela revient à N répliques complètes : le calcul suppose les experts partagés, ce qui n'a pas de sens ici.",
-      });
+      out.push({ severity: "warning", title: "DP-attention conçu pour les MoE", detail: "Sur un modèle dense, cela revient à N répliques complètes." });
     else if (n > 1)
       out.push({
         severity: "info",
         title: "DP-attention + expert parallel",
-        detail: `Poids d'attention répliqués sur chaque GPU (+${gib(est.weights.replicatedAttentionBytes)} au total), experts répartis. Chaque requête vit sur un seul GPU.${m.attentionParamsB === undefined && m.layers.some((g) => g.kind === "mla" || g.kind === "linear") ? " Paramètres d'attention estimés partiellement (couches MLA/linéaires non comptées)." : ""}`,
+        detail: `Poids d'attention répliqués sur chaque GPU (+${gibText(est.weights.replicatedAttentionBytes)} au total), experts répartis. Chaque requête vit sur un seul GPU.${m.attentionParamsB === undefined && m.layers.some((g) => g.kind === "mla" || g.kind === "linear") ? " Paramètres d'attention estimés partiellement (couches MLA/linéaires non comptées)." : ""}`,
       });
   }
 
-  // --- Spécificités GPU
-  if (n > 1 && gpu.id.startsWith("gh200"))
-    out.push({
-      severity: "info",
-      title: "GH200 : 1 GPU par superchip",
-      detail: "Le multi-GPU dépend de la plateforme (NVL2, NVL32, nœuds quad-GH200). Vérifiez la topologie NVLink.",
-    });
+  // --- Offload
+  if ((input.offloadGiBPerGpu ?? 0) > 0) {
+    if (!engine.features.kvOffload)
+      out.push({ severity: "warning", title: `Offload KV non disponible dans ${engine.name}`, detail: "La mémoire CPU saisie n'est pas comptée." });
+    else
+      out.push({
+        severity: "info",
+        title: `Offload CPU : ${est.offload.parkedSessions} sessions en réserve`,
+        detail: `Le KV déchargé n'est pas lu pendant le décodage : il sert aux sessions en attente, préemptées ou à réutiliser (prefix cache). Rechargement d'une session ≈ ${Math.round(est.offload.reloadMs)} ms via ${gpu.hostLinkLabel}.`,
+      });
+  }
 
   if (m.confidence !== "high")
     out.push({
       severity: m.confidence === "low" ? "warning" : "info",
       title: `Architecture de ${m.name} à vérifier (fiabilité ${m.confidence === "low" ? "faible" : "moyenne"})`,
-      detail: `Comparez avec le config.json${m.source ? ` de ${m.source}` : ""} et corrigez le fichier de configuration si besoin.`,
+      detail: `Comparez avec le config.json${m.source ? ` de ${m.source}` : ""} (npm run import-model) et corrigez le fichier de configuration si besoin.`,
     });
 
   const order: Record<Severity, number> = { error: 0, warning: 1, info: 2 };

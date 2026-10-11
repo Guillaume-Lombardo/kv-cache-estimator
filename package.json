@@ -9,7 +9,8 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check-config": "tsx scripts/check-config.ts"
+    "check-config": "tsx scripts/check-config.ts",
+    "import-model": "tsx scripts/import-model.ts"
   },
   "dependencies": {
     "next": "16.4.0",

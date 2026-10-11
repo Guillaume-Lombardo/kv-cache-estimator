@@ -3,7 +3,8 @@
 # -----------------------------------------------------------------------------
 # Lu au démarrage du serveur (relu à chaque requête en mode dev).
 # Chemin alternatif : KV_ESTIMATOR_CONFIG=/chemin/vers/fichier.yaml (ou .json)
-# Vérification : npm run check-config
+# Vérification      : npm run check-config
+# Ajout d'un modèle : npm run import-model -- chemin/config.json  (voir README)
 #
 # Unités :
 #   - memoryGiB : mémoire visible par le driver (nvidia-smi), en Gio (2^30 octets)
@@ -14,66 +15,103 @@
 defaults:
   model: qwen3-32b
   gpu: h100
+  engine: vllm
   gpuCount: 1
   contextTokens: 32768
   kvCacheFormat: bf16
   reservePct: 10 # ≈ vLLM --gpu-memory-utilization 0.90
+
+# Hypothèses de l'estimation de débit (décodage limité par la bande passante mémoire).
+performance:
+  memoryEfficiency: 0.7 # part de la bande passante HBM atteinte
+  computeEfficiency: 0.45 # MFU
+  collectiveLatencyUs: { nvlink: 8, pcie: 30, network: 40 } # par all-reduce / all-to-all
+
+# Nombres de GPUs proposés au-delà de 8 (72 seulement pour les domaines NVL72).
+largeGpuCounts: [16, 32, 64, 72]
 
 # -----------------------------------------------------------------------------
 # Formats de poids — bits effectifs, échelles de quantification incluses.
 # Les embeddings / lm_head restent en 16 bits quand on quantifie.
 # -----------------------------------------------------------------------------
 weightFormats:
-  - id: bf16
-    label: BF16
-    bitsPerParam: 16
-    description: Format d'entraînement standard.
-  - id: fp16
-    label: FP16
-    bitsPerParam: 16
-    description: Seul format 16 bits sur Volta (V100).
-  - id: fp8
-    label: FP8
-    bitsPerParam: 8
-    description: W8A8 FP8 (E4M3), échelles par bloc ou par canal.
-  - id: int8
-    label: INT8
-    bitsPerParam: 8
-    description: W8A8 INT8 (SmoothQuant) ou W8A16 (GPTQ-Int8).
-  - id: int4
-    label: INT4
-    bitsPerParam: 4.25
-    description: W4A16 AWQ/GPTQ, groupes de 128 (échelle + zéro).
-  - id: mxfp4
-    label: MXFP4
-    bitsPerParam: 4.25
-    description: FP4 E2M1, échelle E8M0 par bloc de 32 (OCP MX).
-  - id: nvfp4
-    label: NVFP4
-    bitsPerParam: 4.5
-    description: FP4 E2M1, échelle FP8 par bloc de 16 (NVIDIA).
+  - { id: bf16, label: BF16, bitsPerParam: 16, compute: bf16, description: Format d'entraînement standard. }
+  - { id: fp16, label: FP16, bitsPerParam: 16, compute: bf16, description: Seul format 16 bits sur Volta (V100). }
+  - { id: fp8, label: FP8, bitsPerParam: 8, compute: fp8, description: "W8A8 FP8 (E4M3), échelles par bloc ou par canal." }
+  - { id: int8, label: INT8, bitsPerParam: 8, compute: fp8, description: W8A8 INT8 (SmoothQuant) ou W8A16 (GPTQ-Int8). }
+  - { id: int4, label: INT4, bitsPerParam: 4.25, compute: bf16, description: "W4A16 AWQ/GPTQ, groupes de 128 (échelle + zéro)." }
+  - { id: mxfp4, label: MXFP4, bitsPerParam: 4.25, compute: fp4, description: "FP4 E2M1, échelle E8M0 par bloc de 32 (OCP MX)." }
+  - { id: nvfp4, label: NVFP4, bitsPerParam: 4.5, compute: fp4, description: "FP4 E2M1, échelle FP8 par bloc de 16 (NVIDIA)." }
 
 # -----------------------------------------------------------------------------
 # Formats du KV cache
 # -----------------------------------------------------------------------------
 kvCacheFormats:
-  - id: bf16
-    label: BF16
-    bytesPerElement: 2
-  - id: fp16
-    label: FP16
-    bytesPerElement: 2
-  - id: fp8
-    label: FP8
-    bytesPerElement: 1
-    description: E4M3 (ou E5M2), échelles par tenseur. Perte de qualité généralement faible.
-  - id: nvfp4
-    label: NVFP4
-    bytesPerElement: 0.5625
-    description: 4 bits + échelle FP8 par bloc de 16. Blackwell uniquement.
+  - { id: bf16, label: BF16, bytesPerElement: 2 }
+  - { id: fp16, label: FP16, bytesPerElement: 2 }
+  - { id: fp8, label: FP8, bytesPerElement: 1, description: "E4M3 (ou E5M2), échelles par tenseur. Perte de qualité généralement faible." }
+  - { id: nvfp4, label: NVFP4, bytesPerElement: 0.5625, description: 4 bits + échelle FP8 par bloc de 16. Blackwell uniquement. }
 
 # -----------------------------------------------------------------------------
-# GPUs
+# Moteurs d'inférence — un format doit être supporté par le GPU ET par le moteur.
+# -----------------------------------------------------------------------------
+engines:
+  - id: vllm
+    name: vLLM / llm-d
+    description: "vLLM ≥ 0.11 (moteur V1). llm-d orchestre des instances vLLM : mêmes besoins mémoire par instance."
+    features: { slidingWindowOptimized: true, dpAttention: true, kvOffload: true }
+    weightFormats:
+      bf16: native
+      fp16: native
+      fp8: native
+      int8: { level: native, note: "W8A8 via compressed-tensors, ou W8A16 GPTQ." }
+      int4: { level: native, note: AWQ / GPTQ via kernels Marlin (sm80+). }
+      mxfp4: native
+      nvfp4: { level: native, note: Checkpoints ModelOpt ou compressed-tensors. }
+    kvCacheFormats:
+      bf16: native
+      fp16: native
+      fp8: { level: native, note: "--kv-cache-dtype fp8 (e4m3) ; échelles calibrées recommandées." }
+      nvfp4: { level: limited, note: KV NVFP4 expérimental ou absent selon la version de vLLM. }
+    gpus:
+      v100: { level: limited, note: "Volta (sm70) : pas de FlashAttention, de FP8 ni de Marlin. Support non garanti dans vLLM V1 récent." }
+    notes:
+      - Blocs KV de 16 tokens (arrondi négligeable). Prefix caching non compté.
+      - "États récurrents (Mamba, DeltaNet, KDA) : type piloté par --mamba-ssm-cache-dtype ou par le config.json du modèle."
+      - "llm-d : désagrégation prefill/decode et routage KV-aware entre instances vLLM ; le dimensionnement par instance est identique."
+    flags:
+      memoryUtilization: --gpu-memory-utilization
+      kvCacheDtype: --kv-cache-dtype
+      tensorParallel: --tensor-parallel-size
+      pipelineParallel: --pipeline-parallel-size
+      dpAttention: --data-parallel-size N --enable-expert-parallel
+      kvOffload: "--kv-offloading-size <Gio> (connecteur natif) ou LMCache"
+
+  - id: zml
+    name: ZML (llmd)
+    description: "Profil indicatif, à compléter : ZML compile le graphe via OpenXLA/PJRT."
+    confidence: low
+    features: { slidingWindowOptimized: false, dpAttention: false, kvOffload: false }
+    weightFormats:
+      bf16: native
+      fp16: native
+      fp8: { level: limited, note: Support à vérifier dans la version de ZML utilisée. }
+      int8: { level: limited, note: Support à vérifier dans la version de ZML utilisée. }
+      int4: { level: limited, note: Support à vérifier dans la version de ZML utilisée. }
+      mxfp4: { level: limited, note: Support à vérifier dans la version de ZML utilisée. }
+      nvfp4: { level: limited, note: Support à vérifier dans la version de ZML utilisée. }
+    kvCacheFormats:
+      bf16: native
+      fp16: native
+      fp8: { level: limited, note: Support à vérifier dans la version de ZML utilisée. }
+    gpus:
+      v100: { level: limited, note: Support de Volta à vérifier. }
+    notes:
+      - "Profil non vérifié : formats, gestion du KV (paginée ou préallouée) et fenêtres glissantes à confirmer. Fenêtres glissantes comptées au contexte complet par prudence."
+      - Pour llm-d (orchestration Kubernetes de vLLM), choisissez le profil vLLM.
+
+# -----------------------------------------------------------------------------
+# GPUs — TFLOPS denses (sans sparsité), approximatifs.
 # -----------------------------------------------------------------------------
 gpus:
   - id: v100
@@ -83,9 +121,12 @@ gpus:
     memoryGiB: 31.7
     memoryLabel: 32 Go HBM2
     bandwidthTBs: 0.9
-    interconnect: { label: NVLink 2 (300 Go/s), nvlink: true, bandwidthGBs: 300 }
+    tflops: { bf16: 125 } # FP16 tensor core
+    interconnect: { label: NVLink 2 (300 Go/s bidir.), nvlink: true, bandwidthGBs: 150 }
     maxGpusPerNode: 8
     nvlinkDomain: 8
+    hostLinkGBs: 12
+    hostLinkLabel: PCIe Gen3 x16
     weightFormats:
       bf16: { level: unsupported, note: Pas de BF16 matériel sur Volta. Utilisez FP16. }
       fp16: native
@@ -100,7 +141,7 @@ gpus:
       fp8: { level: unsupported, note: Pas de FP8 matériel ; non géré par les backends d'attention récents. }
       nvfp4: { level: unsupported, note: Blackwell uniquement. }
     notes:
-      - FlashAttention 2/3 non supporté (sm70). Support vLLM récent limité.
+      - FlashAttention 2/3 non supporté (sm70).
       - "Topologie DGX-1 en hybrid cube mesh : NVLink pas tout-à-tout à 8 GPUs."
 
   - id: l40s
@@ -110,9 +151,12 @@ gpus:
     memoryGiB: 45.0
     memoryLabel: 48 Go GDDR6
     bandwidthTBs: 0.864
-    interconnect: { label: "PCIe Gen4 x16 (~32 Go/s par sens)", nvlink: false, bandwidthGBs: 64 }
+    tflops: { bf16: 181, fp8: 362 }
+    interconnect: { label: "PCIe Gen4 x16 (~32 Go/s par sens)", nvlink: false, bandwidthGBs: 32 }
     maxGpusPerNode: 8
     nvlinkDomain: 1
+    hostLinkGBs: 25
+    hostLinkLabel: PCIe Gen4 x16
     weightFormats:
       bf16: native
       fp16: native
@@ -137,10 +181,13 @@ gpus:
     memoryGiB: 79.6
     memoryLabel: 80 Go HBM3
     bandwidthTBs: 3.35
-    interconnect: { label: NVLink 4 + NVSwitch (900 Go/s), nvlink: true, bandwidthGBs: 900 }
+    tflops: { bf16: 989, fp8: 1979 }
+    interconnect: { label: NVLink 4 + NVSwitch (900 Go/s bidir.), nvlink: true, bandwidthGBs: 450 }
     maxGpusPerNode: 8
     nvlinkDomain: 8
-    weightFormats:
+    hostLinkGBs: 55
+    hostLinkLabel: PCIe Gen5 x16
+    weightFormats: &hopperWeights
       bf16: native
       fp16: native
       fp8: native
@@ -148,7 +195,7 @@ gpus:
       int4: native
       mxfp4: { level: limited, note: "Pas de FP4 matériel : W4A16 (Marlin / Triton), déquantification en BF16." }
       nvfp4: { level: limited, note: "Pas de FP4 matériel : W4A16 (Marlin), déquantification en BF16." }
-    kvCacheFormats:
+    kvCacheFormats: &hopperKv
       bf16: native
       fp16: native
       fp8: native
@@ -162,22 +209,14 @@ gpus:
     memoryGiB: 140.4
     memoryLabel: 141 Go HBM3e
     bandwidthTBs: 4.8
-    interconnect: { label: NVLink 4 + NVSwitch (900 Go/s), nvlink: true, bandwidthGBs: 900 }
+    tflops: { bf16: 989, fp8: 1979 }
+    interconnect: { label: NVLink 4 + NVSwitch (900 Go/s bidir.), nvlink: true, bandwidthGBs: 450 }
     maxGpusPerNode: 8
     nvlinkDomain: 8
-    weightFormats:
-      bf16: native
-      fp16: native
-      fp8: native
-      int8: native
-      int4: native
-      mxfp4: { level: limited, note: "Pas de FP4 matériel : W4A16 (Marlin / Triton), déquantification en BF16." }
-      nvfp4: { level: limited, note: "Pas de FP4 matériel : W4A16 (Marlin), déquantification en BF16." }
-    kvCacheFormats:
-      bf16: native
-      fp16: native
-      fp8: native
-      nvfp4: { level: unsupported, note: Blackwell uniquement. }
+    hostLinkGBs: 55
+    hostLinkLabel: PCIe Gen5 x16
+    weightFormats: *hopperWeights
+    kvCacheFormats: *hopperKv
     notes: []
 
   - id: gh200
@@ -187,25 +226,18 @@ gpus:
     memoryGiB: 95.6
     memoryLabel: 96 Go HBM3 (+480 Go LPDDR5X)
     bandwidthTBs: 4.0
-    interconnect: { label: "NVLink-C2C CPU↔GPU (900 Go/s) ; GPU↔GPU selon plateforme", nvlink: true, bandwidthGBs: 900 }
+    tflops: { bf16: 989, fp8: 1979 }
+    interconnect: { label: "GPU↔GPU selon plateforme (réseau, NVL2 ou NVL32)", nvlink: false, bandwidthGBs: 50 }
     maxGpusPerNode: 4
-    nvlinkDomain: 4
-    weightFormats: &hopperWeights
-      bf16: native
-      fp16: native
-      fp8: native
-      int8: native
-      int4: native
-      mxfp4: { level: limited, note: "Pas de FP4 matériel : W4A16, déquantification en BF16." }
-      nvfp4: { level: limited, note: "Pas de FP4 matériel : W4A16, déquantification en BF16." }
-    kvCacheFormats: &hopperKv
-      bf16: native
-      fp16: native
-      fp8: native
-      nvfp4: { level: unsupported, note: Blackwell uniquement. }
+    nvlinkDomain: 1
+    hostMemoryGiBPerGpu: 447
+    hostLinkGBs: 450
+    hostLinkLabel: NVLink-C2C (900 Go/s bidir.)
+    weightFormats: *hopperWeights
+    kvCacheFormats: *hopperKv
     notes:
-      - "480 Go de LPDDR5X côté Grace accessibles de façon cohérente : utilisables pour décharger du KV (LMCache, offload CPU). Non comptés ici."
-      - "Un GPU par superchip : le multi-GPU dépend de la plateforme (NVL2, NVL32, nœuds quad-GH200)."
+      - "NVLink-C2C relie le CPU Grace au GPU, pas les GPUs entre eux. Plateformes NVL2/NVL32 : ajustez interconnect dans le YAML."
+      - "480 Go de LPDDR5X côté Grace accessibles de façon cohérente : utilisables pour décharger du KV."
 
   - id: gh200-144
     name: GH200 (144 Go)
@@ -214,13 +246,17 @@ gpus:
     memoryGiB: 139.5
     memoryLabel: 144 Go HBM3e (+480 Go LPDDR5X)
     bandwidthTBs: 4.9
-    interconnect: { label: "NVLink-C2C CPU↔GPU (900 Go/s) ; GPU↔GPU selon plateforme", nvlink: true, bandwidthGBs: 900 }
+    tflops: { bf16: 989, fp8: 1979 }
+    interconnect: { label: "GPU↔GPU selon plateforme (réseau, NVL2 ou NVL32)", nvlink: false, bandwidthGBs: 50 }
     maxGpusPerNode: 4
-    nvlinkDomain: 4
+    nvlinkDomain: 1
+    hostMemoryGiBPerGpu: 447
+    hostLinkGBs: 450
+    hostLinkLabel: NVLink-C2C (900 Go/s bidir.)
     weightFormats: *hopperWeights
     kvCacheFormats: *hopperKv
     notes:
-      - "480 Go de LPDDR5X côté Grace accessibles de façon cohérente : utilisables pour décharger du KV. Non comptés ici."
+      - "NVLink-C2C relie le CPU Grace au GPU, pas les GPUs entre eux."
       - "Mémoire visible approximative : vérifiez avec nvidia-smi."
 
   - id: b200
@@ -230,9 +266,12 @@ gpus:
     memoryGiB: 179.1
     memoryLabel: 192 Go HBM3e (180 utilisables)
     bandwidthTBs: 8.0
-    interconnect: { label: "NVLink 5 + NVSwitch (1,8 To/s)", nvlink: true, bandwidthGBs: 1800 }
+    tflops: { bf16: 2250, fp8: 4500, fp4: 9000 }
+    interconnect: { label: "NVLink 5 + NVSwitch (1,8 To/s bidir.)", nvlink: true, bandwidthGBs: 900 }
     maxGpusPerNode: 8
     nvlinkDomain: 8
+    hostLinkGBs: 55
+    hostLinkLabel: PCIe Gen5 x16
     weightFormats: &blackwellWeights
       bf16: native
       fp16: native
@@ -245,7 +284,7 @@ gpus:
       bf16: native
       fp16: native
       fp8: native
-      nvfp4: { level: native, note: "KV NVFP4 : disponible dans TensorRT-LLM, expérimental ou absent dans vLLM/SGLang selon la version." }
+      nvfp4: native
     notes: []
 
   - id: gb200
@@ -255,13 +294,18 @@ gpus:
     memoryGiB: 185.0
     memoryLabel: 186 Go HBM3e
     bandwidthTBs: 8.0
-    interconnect: { label: "NVLink 5, domaine NVL72 (1,8 To/s)", nvlink: true, bandwidthGBs: 1800 }
+    tflops: { bf16: 2500, fp8: 5000, fp4: 10000 }
+    interconnect: { label: "NVLink 5, domaine NVL72 (1,8 To/s bidir.)", nvlink: true, bandwidthGBs: 900 }
     maxGpusPerNode: 4
     nvlinkDomain: 72
+    hostMemoryGiBPerGpu: 223
+    hostLinkGBs: 225
+    hostLinkLabel: NVLink-C2C (partagé par 2 GPUs)
     weightFormats: *blackwellWeights
     kvCacheFormats: *blackwellKv
     notes:
-      - "4 GPUs par compute tray, mais domaine NVLink de 72 GPUs (NVL72) : le TP au-delà d'un tray reste en NVLink."
+      - "Un superchip GB200 = 1 Grace + 2 GPUs ; le compteur désigne les GPUs."
+      - "4 GPUs par compute tray, domaine NVLink de 72 GPUs (NVL72) : le TP au-delà d'un tray reste en NVLink."
 
   - id: b300
     name: B300
@@ -270,9 +314,12 @@ gpus:
     memoryGiB: 268.2
     memoryLabel: 288 Go HBM3e
     bandwidthTBs: 8.0
-    interconnect: { label: "NVLink 5 + NVSwitch (1,8 To/s)", nvlink: true, bandwidthGBs: 1800 }
+    tflops: { bf16: 2250, fp8: 4500, fp4: 13500 }
+    interconnect: { label: "NVLink 5 + NVSwitch (1,8 To/s bidir.)", nvlink: true, bandwidthGBs: 900 }
     maxGpusPerNode: 8
     nvlinkDomain: 8
+    hostLinkGBs: 55
+    hostLinkLabel: PCIe Gen5/Gen6 x16
     weightFormats: &blackwellUltraWeights
       bf16: native
       fp16: native
@@ -283,7 +330,7 @@ gpus:
       nvfp4: native
     kvCacheFormats: *blackwellKv
     notes:
-      - "Mémoire visible approximative (288 Go décimaux ≈ 268 Gio) : vérifiez avec nvidia-smi."
+      - "Mémoire visible approximative (288 Go décimaux ≈ 268 Gio ; certaines fiches indiquent 270-279 Go utilisables). Vérifiez avec nvidia-smi."
 
   - id: gb300
     name: GB300
@@ -292,13 +339,17 @@ gpus:
     memoryGiB: 268.2
     memoryLabel: 288 Go HBM3e
     bandwidthTBs: 8.0
-    interconnect: { label: "NVLink 5, domaine NVL72 (1,8 To/s)", nvlink: true, bandwidthGBs: 1800 }
+    tflops: { bf16: 2500, fp8: 5000, fp4: 15000 }
+    interconnect: { label: "NVLink 5, domaine NVL72 (1,8 To/s bidir.)", nvlink: true, bandwidthGBs: 900 }
     maxGpusPerNode: 4
     nvlinkDomain: 72
+    hostMemoryGiBPerGpu: 223
+    hostLinkGBs: 225
+    hostLinkLabel: NVLink-C2C (partagé par 2 GPUs)
     weightFormats: *blackwellUltraWeights
     kvCacheFormats: *blackwellKv
     notes:
-      - "4 GPUs par compute tray, domaine NVLink de 72 GPUs (NVL72)."
+      - "Un superchip GB300 = 1 Grace + 2 GPUs ; le compteur désigne les GPUs. Domaine NVLink de 72 GPUs (NVL72)."
       - "Mémoire visible approximative : vérifiez avec nvidia-smi."
 
 # -----------------------------------------------------------------------------
@@ -306,14 +357,15 @@ gpus:
 # -----------------------------------------------------------------------------
 # layers : groupes de couches qui portent un cache
 #   full    : attention globale GQA/MHA   { count, kvHeads, headDim, headDimV? }
-#   sliding : fenêtre glissante           { count, kvHeads, headDim, headDimV?, window }
+#   sliding : fenêtre glissante / chunk   { count, kvHeads, headDim, headDimV?, window }
 #   mla     : Multi-head Latent Attention { count, kvLoraRank, ropeHeadDim, extraBytesPerToken? }
-#   linear  : Mamba / DeltaNet / KDA      { count, stateElements }  (état constant par requête)
+#   linear  : Mamba / DeltaNet / KDA      { count, ssmElements, convElements }  (état constant)
 # Les couches sans cache (MLP seules, MTP) ne sont pas listées.
-# confidence : high | medium | low. À vérifier contre le config.json de `source`.
+# revision : révision Hugging Face du config.json vérifié (copie dans config/upstream/).
+# confidence : high | medium | low.
 # -----------------------------------------------------------------------------
 models:
-  # ---------------------------------------------------------------- Mistral AI
+  # ================================================================ Mistral AI
   - id: mistral-large-3
     name: Mistral Large 3 (675B-A41B)
     family: Mistral AI
@@ -327,13 +379,28 @@ models:
     attentionParamsB: 11.4
     layers:
       - { kind: mla, count: 61, kvLoraRank: 512, ropeHeadDim: 64 }
-    maxContext: 262144
+    maxContext: 294912
     nativeWeightFormat: fp8
     officialWeightFormats: [bf16, fp8, nvfp4]
     tags: [moe, vision]
-    confidence: medium
-    notes:
-      - Architecture de type DeepSeek-V3 (MLA + MoE).
+    notes: [Architecture de type DeepSeek-V3 (MLA + MoE). Backend MLA compressé requis.]
+
+  - id: mistral-medium-3.5
+    name: Mistral Medium 3.5 (128B)
+    family: Mistral AI
+    source: mistralai/Mistral-Medium-3.5-128B
+    revision: 22b2b868a15677cfa6061277ed2f653d1349a9ab
+    paramsB: 127.7
+    hiddenSize: 12288
+    vocabSize: 131072
+    extraUnquantizedParamsB: 2.68
+    attentionHeads: 96
+    layers:
+      - { kind: full, count: 88, kvHeads: 8, headDim: 128 }
+    maxContext: 262144
+    nativeWeightFormat: fp8
+    officialWeightFormats: [fp8]
+    tags: [vision]
 
   - id: devstral-2
     name: Devstral 2 (123B)
@@ -370,10 +437,11 @@ models:
     name: Mistral Small 3.2 (24B)
     family: Mistral AI
     source: mistralai/Mistral-Small-3.2-24B-Instruct-2506
-    paramsB: 24.0
+    revision: 95a6d26c4bfb886c58daf9d3f7332c857cb27b43
+    paramsB: 24.01
     hiddenSize: 5120
     vocabSize: 131072
-    extraUnquantizedParamsB: 0.4
+    extraUnquantizedParamsB: 0.43
     attentionHeads: 32
     layers:
       - { kind: full, count: 40, kvHeads: 8, headDim: 128 }
@@ -387,18 +455,18 @@ models:
     name: Devstral Small 2 (24B)
     family: Mistral AI
     source: mistralai/Devstral-Small-2-24B-Instruct-2512
-    paramsB: 24.0
+    revision: 55c5b41e98c2dbd21b0c8afffc540dcfc9eb5128
+    paramsB: 24.01
     hiddenSize: 5120
     vocabSize: 131072
-    extraUnquantizedParamsB: 0.4
+    extraUnquantizedParamsB: 0.43
     attentionHeads: 32
     layers:
       - { kind: full, count: 40, kvHeads: 8, headDim: 128 }
-    maxContext: 262144
+    maxContext: 393216
     nativeWeightFormat: fp8
     officialWeightFormats: [fp8]
-    tags: [code]
-    confidence: medium
+    tags: [code, vision]
 
   - id: ministral-3-14b
     name: Ministral 3 (14B)
@@ -407,12 +475,12 @@ models:
     paramsB: 13.9
     hiddenSize: 5120
     vocabSize: 131072
-    extraUnquantizedParamsB: 0.4
+    extraUnquantizedParamsB: 0.43
     attentionHeads: 32
     layers:
       - { kind: full, count: 40, kvHeads: 8, headDim: 128 }
     maxContext: 262144
-    nativeWeightFormat: bf16
+    nativeWeightFormat: fp8
     officialWeightFormats: [bf16, fp8]
     tags: [vision]
     confidence: low
@@ -421,18 +489,18 @@ models:
     name: Ministral 3 (8B)
     family: Mistral AI
     source: mistralai/Ministral-3-8B-Instruct-2512
-    paramsB: 8.4
+    revision: 5b26027e7b19eeb4b7352e1fed3926375dd2cb4d
+    paramsB: 8.92
     hiddenSize: 4096
     vocabSize: 131072
-    extraUnquantizedParamsB: 0.4
+    extraUnquantizedParamsB: 0.43
     attentionHeads: 32
     layers:
       - { kind: full, count: 34, kvHeads: 8, headDim: 128 }
     maxContext: 262144
-    nativeWeightFormat: bf16
+    nativeWeightFormat: fp8
     officialWeightFormats: [bf16, fp8]
     tags: [vision]
-    confidence: low
 
   - id: ministral-3-3b
     name: Ministral 3 (3B)
@@ -442,12 +510,12 @@ models:
     hiddenSize: 3072
     vocabSize: 131072
     tiedEmbeddings: true
-    extraUnquantizedParamsB: 0.4
+    extraUnquantizedParamsB: 0.43
     attentionHeads: 32
     layers:
       - { kind: full, count: 26, kvHeads: 8, headDim: 128 }
     maxContext: 262144
-    nativeWeightFormat: bf16
+    nativeWeightFormat: fp8
     officialWeightFormats: [bf16, fp8]
     tags: [vision]
     confidence: low
@@ -528,7 +596,57 @@ models:
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16]
 
-  # ---------------------------------------------------------------- Z.ai (GLM)
+  # ================================================================ Z.ai (GLM)
+  - id: glm-5.3
+    name: GLM-5.3 (753B-A40B)
+    family: Z.ai (GLM)
+    source: zai-org/GLM-5.3
+    revision: aca966e4e02791568aa6a4ced368624b3d897f42
+    paramsB: 753.3
+    activeParamsB: 40
+    hiddenSize: 6144
+    vocabSize: 154880
+    attentionHeads: 64
+    attentionParamsB: 10
+    layers:
+      # DeepSeek Sparse Attention : indexeur FP8 (128 dims + échelle FP32) sur les 21 couches "full",
+      # les 57 autres réutilisent l'index (IndexShare).
+      - { kind: mla, count: 21, kvLoraRank: 512, ropeHeadDim: 64, extraBytesPerToken: 132 }
+      - { kind: mla, count: 57, kvLoraRank: 512, ropeHeadDim: 64 }
+    maxContext: 1048576
+    nativeWeightFormat: fp8
+    officialWeightFormats: [bf16, fp8]
+    tags: [moe]
+    confidence: medium
+    notes:
+      - "MLA + DeepSeek Sparse Attention. Paramètres actifs estimés (~40 B)."
+      - Couche MTP incluse dans les paramètres, pas dans le KV.
+
+  - id: glm-5.3-flash
+    name: GLM-5.3-Flash (321B)
+    family: Z.ai (GLM)
+    source: zai-org/GLM-5.3-Flash
+    revision: eb9eb208eb0d988989d07a6a12d0fdeb5f52574a
+    paramsB: 321.3
+    activeParamsB: 17
+    hiddenSize: 4096
+    vocabSize: 154880
+    attentionHeads: 64
+    attentionParamsB: 6
+    layers:
+      - { kind: linear, count: 34, ssmElements: 1048576, convElements: 73728, label: KDA (état constant) }
+      # Indexeur DSA avec pooling ×4 des clés (index_kpool) : ~132/4 octets par token.
+      - { kind: mla, count: 11, kvLoraRank: 512, ropeHeadDim: 0, extraBytesPerToken: 33 }
+    maxContext: 1048576
+    nativeWeightFormat: fp8
+    officialWeightFormats: [fp8]
+    ssmStateBytes: 4
+    tags: [moe, hybrid, vision]
+    confidence: medium
+    notes:
+      - "Hybride KDA / MLA-DSA (NoPE). Paramètres actifs estimés (~17 B)."
+      - "États KDA en FP32 par prudence ; index DSA supposé compressé ×4 (index_kpool)."
+
   - id: glm-5
     name: GLM-5 (744B-A40B)
     family: Z.ai (GLM)
@@ -538,22 +656,22 @@ models:
     hiddenSize: 6144
     vocabSize: 154880
     attentionHeads: 64
-    attentionParamsB: 9
+    attentionParamsB: 10
     layers:
-      # DeepSeek Sparse Attention : indexeur FP8 (128 dims + échelle) en plus du latent MLA.
       - { kind: mla, count: 78, kvLoraRank: 512, ropeHeadDim: 64, extraBytesPerToken: 132 }
     maxContext: 202752
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
     tags: [moe]
-    confidence: low
-    notes: [MLA + DeepSeek Sparse Attention (DSA).]
+    confidence: medium
+    notes: ["MLA + DeepSeek Sparse Attention (DSA), architecture proche de GLM-5.3. Indexeur compté sur toutes les couches (borne haute)."]
 
   - id: glm-4.7
-    name: GLM-4.7 (355B-A32B)
+    name: GLM-4.7 (358B-A32B)
     family: Z.ai (GLM)
     source: zai-org/GLM-4.7
-    paramsB: 358
+    revision: 602d01efcdd332c5238ca4bcede555defbe83eb7
+    paramsB: 358.3
     activeParamsB: 32
     hiddenSize: 5120
     vocabSize: 151552
@@ -567,10 +685,10 @@ models:
     notes: [Couche MTP (décodage spéculatif) incluse dans les paramètres, pas dans le KV.]
 
   - id: glm-4.6
-    name: GLM-4.6 (355B-A32B)
+    name: GLM-4.6 (358B-A32B)
     family: Z.ai (GLM)
     source: zai-org/GLM-4.6
-    paramsB: 358
+    paramsB: 358.3
     activeParamsB: 32
     hiddenSize: 5120
     vocabSize: 151552
@@ -578,22 +696,6 @@ models:
     layers:
       - { kind: full, count: 92, kvHeads: 8, headDim: 128 }
     maxContext: 202752
-    nativeWeightFormat: bf16
-    officialWeightFormats: [bf16, fp8]
-    tags: [moe]
-
-  - id: glm-4.5
-    name: GLM-4.5 (355B-A32B)
-    family: Z.ai (GLM)
-    source: zai-org/GLM-4.5
-    paramsB: 358
-    activeParamsB: 32
-    hiddenSize: 5120
-    vocabSize: 151552
-    attentionHeads: 96
-    layers:
-      - { kind: full, count: 92, kvHeads: 8, headDim: 128 }
-    maxContext: 131072
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
     tags: [moe]
@@ -633,9 +735,10 @@ models:
     confidence: medium
 
   - id: glm-4.7-flash
-    name: GLM-4.7-Flash (30B-A3B)
+    name: GLM-4.7-Flash (31B-A3B)
     family: Z.ai (GLM)
     source: zai-org/GLM-4.7-Flash
+    revision: 7dd20894a642a0aa287e9827cb1a1f7f91386b67
     paramsB: 31.2
     activeParamsB: 3
     hiddenSize: 2048
@@ -648,7 +751,6 @@ models:
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16]
     tags: [moe]
-    confidence: low
 
   - id: glm-4-32b
     name: GLM-4-32B-0414
@@ -665,42 +767,52 @@ models:
     officialWeightFormats: [bf16]
     confidence: medium
 
-  - id: glm-4-9b
-    name: GLM-4-9B-0414
-    family: Z.ai (GLM)
-    source: zai-org/GLM-4-9B-0414
-    paramsB: 9.4
-    hiddenSize: 4096
-    vocabSize: 151552
-    attentionHeads: 32
+  # ================================================================ Moonshot (Kimi)
+  - id: kimi-k3
+    name: Kimi K3 (2,8T)
+    family: Moonshot (Kimi)
+    source: moonshotai/Kimi-K3
+    revision: f831ab66814297da540d832a5235f8e904f29d06
+    paramsB: 2800
+    activeParamsB: 100
+    hiddenSize: 7168
+    vocabSize: 163840
+    extraUnquantizedParamsB: 54.8
+    attentionHeads: 96
+    attentionParamsB: 30
     layers:
-      - { kind: full, count: 40, kvHeads: 2, headDim: 128 }
-    maxContext: 32768
-    nativeWeightFormat: bf16
-    officialWeightFormats: [bf16]
+      - { kind: linear, count: 69, ssmElements: 1572864, convElements: 110592, label: KDA (état constant) }
+      - { kind: mla, count: 24, kvLoraRank: 512, ropeHeadDim: 0 }
+    maxContext: 1048576
+    nativeWeightFormat: mxfp4
+    officialWeightFormats: [mxfp4]
+    ssmStateBytes: 4
+    tags: [moe, hybrid, vision]
     confidence: medium
+    notes:
+      - "Hybride KDA / MLA (NoPE), 896 experts. Experts en MXFP4 natif, ~57 B paramètres en BF16."
+      - "Nombre de paramètres nominal ; paramètres actifs estimés (~100 B), à confirmer."
 
-  # ---------------------------------------------------------------- Moonshot (Kimi)
   - id: kimi-k2.5
     name: Kimi K2.5 (1T-A32B)
     family: Moonshot (Kimi)
     source: moonshotai/Kimi-K2.5
-    paramsB: 1030
+    revision: 4d01dfe0332d63057c186e0b262165819efb6611
+    paramsB: 1027
     activeParamsB: 32
     hiddenSize: 7168
     vocabSize: 163840
-    extraUnquantizedParamsB: 0.4
+    extraUnquantizedParamsB: 9.8
     attentionHeads: 64
     attentionParamsB: 6.2
     layers:
       - { kind: mla, count: 61, kvLoraRank: 512, ropeHeadDim: 64 }
     maxContext: 262144
     nativeWeightFormat: int4
+    nativeBitsPerParam: 4.5
     officialWeightFormats: [int4]
     tags: [moe, vision]
-    confidence: medium
-    notes:
-      - "Experts en INT4 natif (QAT, groupes de 32 ≈ 4,5 bits), attention en BF16 : la taille réelle (~595 Go) est un peu au-dessus de l'estimation INT4."
+    notes: ["Experts en INT4 natif (QAT, groupes de 32 = 4,5 bits), attention et couches partagées en BF16 (~12 B)."]
 
   - id: kimi-k2-thinking
     name: Kimi K2 Thinking (1T-A32B)
@@ -710,22 +822,24 @@ models:
     activeParamsB: 32
     hiddenSize: 7168
     vocabSize: 163840
+    extraUnquantizedParamsB: 9.8
     attentionHeads: 64
     attentionParamsB: 6.2
     layers:
       - { kind: mla, count: 61, kvLoraRank: 512, ropeHeadDim: 64 }
     maxContext: 262144
     nativeWeightFormat: int4
+    nativeBitsPerParam: 4.5
     officialWeightFormats: [int4]
     tags: [moe, reasoning]
-    notes:
-      - "Experts en INT4 natif (QAT, groupes de 32 ≈ 4,5 bits), attention en BF16 : la taille réelle (~594 Go) est un peu au-dessus de l'estimation INT4."
+    notes: ["Experts en INT4 natif (QAT, groupes de 32 = 4,5 bits), attention en BF16."]
 
   - id: kimi-k2-instruct
     name: Kimi K2 Instruct 0905 (1T-A32B)
     family: Moonshot (Kimi)
     source: moonshotai/Kimi-K2-Instruct-0905
-    paramsB: 1026
+    revision: fd1984e2b7a3350dbf7305fe73a4ede25c14de50
+    paramsB: 1026.4
     activeParamsB: 32
     hiddenSize: 7168
     vocabSize: 163840
@@ -737,6 +851,7 @@ models:
     nativeWeightFormat: fp8
     officialWeightFormats: [fp8]
     tags: [moe]
+    notes: [Révision vérifiée sur Kimi-K2-Instruct (0711, 128k) ; la version 0905 porte le contexte à 256k.]
 
   - id: kimi-linear
     name: Kimi Linear (48B-A3B)
@@ -749,16 +864,58 @@ models:
     attentionHeads: 32
     attentionParamsB: 1.5
     layers:
-      - { kind: linear, count: 20, stateElements: 561152, label: KDA (état constant) }
-      - { kind: mla, count: 7, kvLoraRank: 512, ropeHeadDim: 64 }
+      - { kind: linear, count: 20, ssmElements: 524288, convElements: 36864, label: KDA (état constant) }
+      - { kind: mla, count: 7, kvLoraRank: 512, ropeHeadDim: 0 }
     maxContext: 1048576
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16]
+    ssmStateBytes: 4
     tags: [moe, hybrid]
     confidence: low
-    notes: [Hybride Kimi Delta Attention / MLA, ratio 3:1.]
+    notes: [Hybride Kimi Delta Attention / MLA (NoPE), ratio 3:1.]
 
-  # ---------------------------------------------------------------- Xiaomi (MiMo)
+  # ================================================================ Xiaomi (MiMo)
+  - id: mimo-v2.6-pro
+    name: MiMo-V2.6-Pro (1T)
+    family: Xiaomi (MiMo)
+    source: XiaomiMiMo/MiMo-V2.6-Pro-RL
+    revision: b61f21852680ee02a29e946e18cf8697f4844061
+    paramsB: 1024
+    activeParamsB: 42
+    hiddenSize: 6144
+    vocabSize: 152576
+    extraUnquantizedParamsB: 8.8
+    attentionHeads: 128
+    layers:
+      - { kind: sliding, count: 60, kvHeads: 8, headDim: 192, headDimV: 128, window: 128 }
+      - { kind: full, count: 10, kvHeads: 8, headDim: 192, headDimV: 128 }
+    maxContext: 1048576
+    nativeWeightFormat: fp8
+    officialWeightFormats: [fp8]
+    tags: [moe, swa, vision]
+    confidence: medium
+    notes: ["Attention hybride fenêtre glissante (128 tokens) / globale, 384 experts. Paramètres actifs estimés (~42 B)."]
+
+  - id: mimo-v2.6-flash
+    name: MiMo-V2.6-Flash (311B-A15B)
+    family: Xiaomi (MiMo)
+    source: XiaomiMiMo/MiMo-V2.6-Flash-RL
+    revision: dcd3fd83fb181622fbc606fbb1709901982a62c2
+    paramsB: 311
+    activeParamsB: 15
+    hiddenSize: 4096
+    vocabSize: 152576
+    extraUnquantizedParamsB: 2.85
+    attentionHeads: 64
+    layers:
+      - { kind: sliding, count: 39, kvHeads: 8, headDim: 192, headDimV: 128, window: 128 }
+      - { kind: full, count: 9, kvHeads: 4, headDim: 192, headDimV: 128 }
+    maxContext: 1048576
+    nativeWeightFormat: fp8
+    officialWeightFormats: [fp8]
+    tags: [moe, swa, vision]
+    notes: [Attention hybride fenêtre glissante (128 tokens) / globale + 3 couches MTP.]
+
   - id: mimo-v2-flash
     name: MiMo-V2-Flash (309B-A15B)
     family: Xiaomi (MiMo)
@@ -769,20 +926,21 @@ models:
     vocabSize: 152576
     attentionHeads: 64
     layers:
-      - { kind: sliding, count: 40, kvHeads: 8, headDim: 192, headDimV: 128, window: 128 }
-      - { kind: full, count: 8, kvHeads: 4, headDim: 192, headDimV: 128 }
+      - { kind: sliding, count: 39, kvHeads: 8, headDim: 192, headDimV: 128, window: 128 }
+      - { kind: full, count: 9, kvHeads: 4, headDim: 192, headDimV: 128 }
     maxContext: 262144
     nativeWeightFormat: fp8
     officialWeightFormats: [fp8]
     tags: [moe, swa]
-    confidence: low
-    notes: [Attention hybride fenêtre glissante (128 tokens) / globale, ratio 5:1, + MTP.]
+    confidence: medium
+    notes: [Architecture supposée identique à MiMo-V2.6-Flash.]
 
   - id: mimo-7b
     name: MiMo-7B-RL
     family: Xiaomi (MiMo)
     source: XiaomiMiMo/MiMo-7B-RL
-    paramsB: 7.8
+    revision: 6299b5a2c45daf0c429285c92b8e61a5bd011c0d
+    paramsB: 7.83
     hiddenSize: 4096
     vocabSize: 151680
     attentionHeads: 32
@@ -792,9 +950,8 @@ models:
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16]
     tags: [reasoning]
-    confidence: medium
 
-  # ---------------------------------------------------------------- Qwen
+  # ================================================================ Qwen
   - id: qwen3.5-397b
     name: Qwen3.5-397B-A17B
     family: Qwen (Alibaba)
@@ -806,12 +963,13 @@ models:
     extraUnquantizedParamsB: 0.6
     attentionHeads: 32
     layers:
-      - { kind: linear, count: 45, stateElements: 1085440, label: Gated DeltaNet (état constant) }
+      - { kind: linear, count: 45, ssmElements: 1048576, convElements: 36864, label: Gated DeltaNet (état constant) }
       - { kind: full, count: 15, kvHeads: 2, headDim: 256 }
     maxContext: 262144
     maxContextExtended: 1048576
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
+    ssmStateBytes: 4
     tags: [moe, hybrid, vision]
     confidence: low
     notes: [Hybride Gated DeltaNet / attention complète, ratio 3:1.]
@@ -820,21 +978,23 @@ models:
     name: Qwen3.5-35B-A3B
     family: Qwen (Alibaba)
     source: Qwen/Qwen3.5-35B-A3B
-    paramsB: 35
+    revision: 59d61f3ce65a6d9863b86d2e96597125219dc754
+    paramsB: 35.95
     activeParamsB: 3
     hiddenSize: 2048
     vocabSize: 248320
     extraUnquantizedParamsB: 0.4
     attentionHeads: 16
     layers:
-      - { kind: linear, count: 30, stateElements: 548864, label: Gated DeltaNet (état constant) }
+      - { kind: linear, count: 30, ssmElements: 524288, convElements: 24576, label: Gated DeltaNet (état constant) }
       - { kind: full, count: 10, kvHeads: 2, headDim: 256 }
     maxContext: 262144
     maxContextExtended: 1048576
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
+    ssmStateBytes: 4
     tags: [moe, hybrid, vision]
-    confidence: low
+    notes: [États DeltaNet en FP32 (mamba_ssm_dtype du config.json).]
 
   - id: qwen3-coder-480b
     name: Qwen3-Coder-480B-A35B
@@ -857,7 +1017,8 @@ models:
     name: Qwen3-235B-A22B-2507
     family: Qwen (Alibaba)
     source: Qwen/Qwen3-235B-A22B-Instruct-2507
-    paramsB: 235.1
+    revision: ac9c66cc9b46af7306746a9250f23d47083d689e
+    paramsB: 235.09
     activeParamsB: 22
     hiddenSize: 4096
     vocabSize: 151936
@@ -880,7 +1041,7 @@ models:
     vocabSize: 151936
     attentionHeads: 16
     layers:
-      - { kind: linear, count: 36, stateElements: 548864, label: Gated DeltaNet (état constant) }
+      - { kind: linear, count: 36, ssmElements: 524288, convElements: 24576, label: Gated DeltaNet (état constant) }
       - { kind: full, count: 12, kvHeads: 2, headDim: 256 }
     maxContext: 262144
     maxContextExtended: 1048576
@@ -927,7 +1088,8 @@ models:
     name: Qwen3-32B
     family: Qwen (Alibaba)
     source: Qwen/Qwen3-32B
-    paramsB: 32.8
+    revision: 9216db5781bf21249d130ec9da846c4624c16137
+    paramsB: 32.76
     hiddenSize: 5120
     vocabSize: 151936
     attentionHeads: 64
@@ -957,7 +1119,8 @@ models:
     name: Qwen3-8B
     family: Qwen (Alibaba)
     source: Qwen/Qwen3-8B
-    paramsB: 8.2
+    revision: b968826d9c46dd6066d109eabc6255188de91218
+    paramsB: 8.19
     hiddenSize: 4096
     vocabSize: 151936
     attentionHeads: 32
@@ -980,21 +1143,6 @@ models:
     layers:
       - { kind: full, count: 36, kvHeads: 8, headDim: 128 }
     maxContext: 262144
-    nativeWeightFormat: bf16
-    officialWeightFormats: [bf16, fp8]
-
-  - id: qwen3-1.7b
-    name: Qwen3-1.7B
-    family: Qwen (Alibaba)
-    source: Qwen/Qwen3-1.7B
-    paramsB: 2.0
-    hiddenSize: 2048
-    vocabSize: 151936
-    tiedEmbeddings: true
-    attentionHeads: 16
-    layers:
-      - { kind: full, count: 28, kvHeads: 8, headDim: 128 }
-    maxContext: 32768
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
 
@@ -1028,27 +1176,248 @@ models:
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, int8, int4]
 
-  # ---------------------------------------------------------------- NVIDIA
+  # ================================================================ DeepSeek
+  - id: deepseek-v3.2
+    name: DeepSeek-V3.2 (671B-A37B)
+    family: DeepSeek
+    source: deepseek-ai/DeepSeek-V3.2
+    paramsB: 671
+    activeParamsB: 37
+    hiddenSize: 7168
+    vocabSize: 129280
+    attentionHeads: 128
+    attentionParamsB: 11.4
+    layers:
+      # DeepSeek Sparse Attention : indexeur FP8 (128 dims + échelle FP32) sur chaque couche.
+      - { kind: mla, count: 61, kvLoraRank: 512, ropeHeadDim: 64, extraBytesPerToken: 132 }
+    maxContext: 131072
+    maxContextExtended: 163840
+    nativeWeightFormat: fp8
+    officialWeightFormats: [fp8]
+    tags: [moe, reasoning]
+    notes: ["Module MTP (14 B) non compté : il n'est chargé qu'en décodage spéculatif."]
+
+  - id: deepseek-v3.1
+    name: DeepSeek-V3.1 (671B-A37B)
+    family: DeepSeek
+    source: deepseek-ai/DeepSeek-V3.1
+    paramsB: 671
+    activeParamsB: 37
+    hiddenSize: 7168
+    vocabSize: 129280
+    attentionHeads: 128
+    attentionParamsB: 11.4
+    layers:
+      - { kind: mla, count: 61, kvLoraRank: 512, ropeHeadDim: 64 }
+    maxContext: 131072
+    maxContextExtended: 163840
+    nativeWeightFormat: fp8
+    officialWeightFormats: [fp8]
+    tags: [moe, reasoning]
+    notes: ["Même architecture que DeepSeek-V3 et R1-0528. Module MTP (14 B) non compté."]
+
+  - id: deepseek-r1-0528
+    name: DeepSeek-R1-0528 (671B-A37B)
+    family: DeepSeek
+    source: deepseek-ai/DeepSeek-R1-0528
+    paramsB: 671
+    activeParamsB: 37
+    hiddenSize: 7168
+    vocabSize: 129280
+    attentionHeads: 128
+    attentionParamsB: 11.4
+    layers:
+      - { kind: mla, count: 61, kvLoraRank: 512, ropeHeadDim: 64 }
+    maxContext: 131072
+    maxContextExtended: 163840
+    nativeWeightFormat: fp8
+    officialWeightFormats: [fp8]
+    tags: [moe, reasoning]
+
+  # ================================================================ OpenAI (gpt-oss)
+  - id: gpt-oss-120b
+    name: gpt-oss-120b (117B-A5B)
+    family: OpenAI (gpt-oss)
+    source: openai/gpt-oss-120b
+    paramsB: 116.8
+    activeParamsB: 5.1
+    hiddenSize: 2880
+    vocabSize: 201088
+    extraUnquantizedParamsB: 1.0
+    attentionHeads: 64
+    layers:
+      - { kind: sliding, count: 18, kvHeads: 8, headDim: 64, window: 128 }
+      - { kind: full, count: 18, kvHeads: 8, headDim: 64 }
+    maxContext: 131072
+    nativeWeightFormat: mxfp4
+    officialWeightFormats: [mxfp4]
+    tags: [moe, swa, reasoning]
+    notes: ["Experts en MXFP4 natif, attention en BF16 (~65 Go au total). Couches alternées fenêtre 128 / globale, avec attention sinks."]
+
+  - id: gpt-oss-20b
+    name: gpt-oss-20b (21B-A3.6B)
+    family: OpenAI (gpt-oss)
+    source: openai/gpt-oss-20b
+    paramsB: 20.9
+    activeParamsB: 3.6
+    hiddenSize: 2880
+    vocabSize: 201088
+    extraUnquantizedParamsB: 0.65
+    attentionHeads: 64
+    layers:
+      - { kind: sliding, count: 12, kvHeads: 8, headDim: 64, window: 128 }
+      - { kind: full, count: 12, kvHeads: 8, headDim: 64 }
+    maxContext: 131072
+    nativeWeightFormat: mxfp4
+    officialWeightFormats: [mxfp4]
+    tags: [moe, swa, reasoning]
+
+  # ================================================================ Meta (Llama)
+  - id: llama-4-maverick
+    name: Llama 4 Maverick (400B-A17B)
+    family: Meta (Llama)
+    source: meta-llama/Llama-4-Maverick-17B-128E-Instruct
+    paramsB: 401.6
+    activeParamsB: 17
+    hiddenSize: 5120
+    vocabSize: 202048
+    extraUnquantizedParamsB: 0.9
+    attentionHeads: 40
+    layers:
+      # iRoPE : 3 couches sur 4 en attention locale par chunks de 8192 tokens (modélisée comme une fenêtre).
+      - { kind: sliding, count: 36, kvHeads: 8, headDim: 128, window: 8192 }
+      - { kind: full, count: 12, kvHeads: 8, headDim: 128 }
+    maxContext: 1048576
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16, fp8]
+    tags: [moe, swa, vision]
+    notes: [Licence Llama 4. Attention locale par chunks de 8k sur 36 couches.]
+
+  - id: llama-4-scout
+    name: Llama 4 Scout (109B-A17B)
+    family: Meta (Llama)
+    source: meta-llama/Llama-4-Scout-17B-16E-Instruct
+    paramsB: 108.6
+    activeParamsB: 17
+    hiddenSize: 5120
+    vocabSize: 202048
+    extraUnquantizedParamsB: 0.9
+    attentionHeads: 40
+    layers:
+      - { kind: sliding, count: 36, kvHeads: 8, headDim: 128, window: 8192 }
+      - { kind: full, count: 12, kvHeads: 8, headDim: 128 }
+    maxContext: 10485760
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16]
+    tags: [moe, swa, vision]
+    notes: [Contexte annoncé de 10M tokens. Licence Llama 4.]
+
+  - id: llama-3.1-405b
+    name: Llama 3.1 405B
+    family: Meta (Llama)
+    source: meta-llama/Llama-3.1-405B-Instruct
+    paramsB: 405.9
+    hiddenSize: 16384
+    vocabSize: 128256
+    attentionHeads: 128
+    layers:
+      - { kind: full, count: 126, kvHeads: 8, headDim: 128 }
+    maxContext: 131072
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16, fp8]
+    notes: [Licence Llama 3.1.]
+
+  - id: llama-3.3-70b
+    name: Llama 3.3 70B
+    family: Meta (Llama)
+    source: meta-llama/Llama-3.3-70B-Instruct
+    paramsB: 70.6
+    hiddenSize: 8192
+    vocabSize: 128256
+    attentionHeads: 64
+    layers:
+      - { kind: full, count: 80, kvHeads: 8, headDim: 128 }
+    maxContext: 131072
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16]
+    notes: [Licence Llama 3.3.]
+
+  - id: llama-3.1-8b
+    name: Llama 3.1 8B
+    family: Meta (Llama)
+    source: meta-llama/Llama-3.1-8B-Instruct
+    paramsB: 8.03
+    hiddenSize: 4096
+    vocabSize: 128256
+    attentionHeads: 32
+    layers:
+      - { kind: full, count: 32, kvHeads: 8, headDim: 128 }
+    maxContext: 131072
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16]
+    notes: [Licence Llama 3.1.]
+
+  # ================================================================ NVIDIA
+  - id: nemotron-3-super
+    name: Nemotron 3 Super (124B-A12B)
+    family: NVIDIA
+    source: nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16
+    revision: 2dc98e2afe4face0e4ce40972a915c45368bd34a
+    paramsB: 123.6
+    activeParamsB: 12
+    hiddenSize: 4096
+    vocabSize: 131072
+    attentionHeads: 32
+    attentionParamsB: 0.4
+    layers:
+      - { kind: linear, count: 40, ssmElements: 1048576, convElements: 30720, label: Mamba-2 (état constant) }
+      - { kind: full, count: 8, kvHeads: 2, headDim: 128 }
+    maxContext: 262144
+    maxContextExtended: 1048576
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16, fp8, nvfp4]
+    ssmStateBytes: 4
+    tags: [moe, hybrid]
+    notes: ["Hybride Mamba-2 / Transformer, LatentMoE (512 experts). États SSM en FP32 (mamba_ssm_cache_dtype). 1M annoncé par NVIDIA."]
+
   - id: nemotron-3-nano
-    name: Nemotron 3 Nano (30B-A3B)
+    name: Nemotron 3 Nano (31.6B-A3.6B)
     family: NVIDIA
     source: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16
-    paramsB: 31.6
+    revision: bf77c3174f68ad409e1c2aa60daeb46e32d1c606
+    paramsB: 31.58
     activeParamsB: 3.6
     hiddenSize: 2688
     vocabSize: 131072
     attentionHeads: 32
     attentionParamsB: 0.2
     layers:
-      - { kind: linear, count: 23, stateElements: 542720, label: Mamba-2 (état constant) }
+      - { kind: linear, count: 23, ssmElements: 524288, convElements: 18432, label: Mamba-2 (état constant) }
       - { kind: full, count: 6, kvHeads: 2, headDim: 128 }
     maxContext: 262144
     maxContextExtended: 1048576
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8, nvfp4]
+    ssmStateBytes: 4
     tags: [moe, hybrid]
-    confidence: medium
-    notes: [Hybride Mamba-2 / Transformer MoE ; les couches MoE n'ont pas de cache.]
+    notes: ["Hybride Mamba-2 / Transformer MoE ; les couches MoE n'ont pas de cache. États SSM en FP32. 1M annoncé par NVIDIA."]
+
+  - id: llama-3.3-nemotron-super-49b
+    name: Llama-3.3-Nemotron-Super-49B
+    family: NVIDIA
+    source: nvidia/Llama-3.3-Nemotron-Super-49B-v1
+    revision: 387156d8d6868c19f3472fa607aa9bfc4f662333
+    paramsB: 49.87
+    hiddenSize: 8192
+    vocabSize: 128256
+    attentionHeads: 64
+    layers:
+      - { kind: full, count: 49, kvHeads: 8, headDim: 128 }
+    maxContext: 131072
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16, fp8]
+    tags: [reasoning]
+    notes: ["Llama 3.3 70B élagué par NAS : 49 couches d'attention conservées sur 80 (même architecture pour la v1.5)."]
 
   - id: nemotron-nano-9b-v2
     name: Nemotron Nano 9B v2
@@ -1060,46 +1429,59 @@ models:
     attentionHeads: 40
     attentionParamsB: 0.2
     layers:
-      - { kind: linear, count: 27, stateElements: 1347584, label: Mamba-2 (état constant) }
+      - { kind: linear, count: 27, ssmElements: 1310720, convElements: 36864, label: Mamba-2 (état constant) }
       - { kind: full, count: 4, kvHeads: 8, headDim: 128 }
     maxContext: 131072
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, fp8]
+    ssmStateBytes: 4
     tags: [hybrid, reasoning]
     confidence: medium
 
-  - id: llama-3.1-nemotron-70b
-    name: Llama-3.1-Nemotron-70B-Instruct
-    family: NVIDIA
-    source: nvidia/Llama-3.1-Nemotron-70B-Instruct-HF
-    paramsB: 70.6
-    hiddenSize: 8192
-    vocabSize: 128256
-    attentionHeads: 64
-    layers:
-      - { kind: full, count: 80, kvHeads: 8, headDim: 128 }
-    maxContext: 131072
-    nativeWeightFormat: bf16
-    officialWeightFormats: [bf16]
-    notes: [Architecture Llama 3.1 70B. Licence Llama 3.1.]
-
-  - id: llama-3.1-nemotron-nano-8b
-    name: Llama-3.1-Nemotron-Nano-8B-v1
-    family: NVIDIA
-    source: nvidia/Llama-3.1-Nemotron-Nano-8B-v1
-    paramsB: 8.0
-    hiddenSize: 4096
-    vocabSize: 128256
+  # ================================================================ Google
+  - id: gemma-4-31b
+    name: Gemma 4 31B
+    family: Google (Gemma)
+    source: google/gemma-4-31B
+    revision: 5bbc2fb1c1b2c611d06e3d9f23c170ba21659d89
+    paramsB: 32.68
+    hiddenSize: 5376
+    vocabSize: 262144
+    tiedEmbeddings: true
+    extraUnquantizedParamsB: 1.4
     attentionHeads: 32
     layers:
-      - { kind: full, count: 32, kvHeads: 8, headDim: 128 }
-    maxContext: 131072
+      - { kind: sliding, count: 50, kvHeads: 16, headDim: 256, window: 1024 }
+      - { kind: full, count: 10, kvHeads: 4, headDim: 512 }
+    maxContext: 262144
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16]
-    tags: [reasoning]
-    notes: [Architecture Llama 3.1 8B.]
+    weightFormatNotes: &gemmaFp16
+      fp16: { level: warning, note: "Gemma déborde en FP16 (activations > 65504) : préférez BF16. Sur V100, utilisez un checkpoint quantifié." }
+    tags: [vision, swa]
+    notes: ["K et V comptés séparément (attention_k_eq_v partage la projection, pas le cache)."]
 
-  # ---------------------------------------------------------------- Google
+  - id: gemma-4-26b-a4b
+    name: Gemma 4 26B-A4B
+    family: Google (Gemma)
+    source: google/gemma-4-26B-A4B
+    revision: 24548b62aa021d562695c04aaf7758a1ea47990b
+    paramsB: 26.54
+    activeParamsB: 4
+    hiddenSize: 2816
+    vocabSize: 262144
+    tiedEmbeddings: true
+    extraUnquantizedParamsB: 0.74
+    attentionHeads: 16
+    layers:
+      - { kind: sliding, count: 25, kvHeads: 8, headDim: 256, window: 1024 }
+      - { kind: full, count: 5, kvHeads: 2, headDim: 512 }
+    maxContext: 262144
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16]
+    weightFormatNotes: *gemmaFp16
+    tags: [moe, vision, swa]
+
   - id: gemma-3-27b
     name: Gemma 3 27B
     family: Google (Gemma)
@@ -1116,8 +1498,7 @@ models:
     maxContext: 131072
     nativeWeightFormat: bf16
     officialWeightFormats: [bf16, int4]
-    weightFormatNotes: &gemmaFp16
-      fp16: { level: warning, note: "Gemma déborde en FP16 (activations > 65504) : préférez BF16. Sur V100, utilisez un checkpoint quantifié." }
+    weightFormatNotes: *gemmaFp16
     tags: [vision, swa]
     notes: [5 couches locales (fenêtre 1024) pour 1 globale. INT4 officiel via QAT.]
 
@@ -1158,21 +1539,3 @@ models:
     officialWeightFormats: [bf16, int4]
     weightFormatNotes: *gemmaFp16
     tags: [vision, swa]
-
-  - id: gemma-3-1b
-    name: Gemma 3 1B
-    family: Google (Gemma)
-    source: google/gemma-3-1b-it
-    paramsB: 1.0
-    hiddenSize: 1152
-    vocabSize: 262144
-    tiedEmbeddings: true
-    attentionHeads: 4
-    layers:
-      - { kind: sliding, count: 22, kvHeads: 1, headDim: 256, window: 512 }
-      - { kind: full, count: 4, kvHeads: 1, headDim: 256 }
-    maxContext: 32768
-    nativeWeightFormat: bf16
-    officialWeightFormats: [bf16, int4]
-    weightFormatNotes: *gemmaFp16
-    tags: [swa]

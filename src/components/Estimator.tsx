@@ -1,206 +1,220 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { AppConfig, GpuSpec, ModelSpec, Support } from "@/lib/config-schema";
+import type { AppConfig, EngineSpec, GpuSpec, ModelSpec, Support } from "@/lib/config-schema";
 import {
   collectIssues,
   CONTEXT_STEPS,
   contextLabel,
   estimate,
+  GIB,
   isMoE,
-  PARALLELISM_LABELS,
+  isValidTp,
+  kvSupport,
   supportLevelLabel,
-  supportOf,
-  type EstimateInput,
-  type Issue,
-  type Parallelism,
+  weightSupport,
+  type ParallelMode,
 } from "@/lib/calc";
-import { fmtBytes, fmtInt, fmtParams, fmtTokens } from "@/lib/format";
+import { fmtBytes, fmtDuration, fmtInt, fmtParams, fmtRate, fmtTokens } from "@/lib/format";
+import { estimatePerf } from "@/lib/perf";
+import { defaultTp, divisors, gpuCountOptions, maxTp, pickKvFormat, pickWeightFormat } from "@/lib/planning";
+import { launchCommand, resolveScenario, scenarioFromQuery, scenarioToQuery, type QueryParams, type Scenario } from "@/lib/scenario";
 import { ChipGroup, type ChipOption } from "./ChipGroup";
-import { archLabel, ModelCombobox, TAG_LABELS } from "./ModelCombobox";
+import { ComparePanel } from "./ComparePanel";
+import { ImportPanel } from "./ImportPanel";
+import { ModelCombobox } from "./ModelCombobox";
+import { IssuesPanel, Kpi, KvBreakdown, MemoryBar, ModelCard, SessionsChart } from "./panels";
+import { PerfPanel } from "./PerfPanel";
+import { SizingPanel, type SizingChoice } from "./SizingPanel";
 
-export interface InitialState {
-  model?: string;
-  ctx?: number;
-  gpu?: string;
-  n?: number;
-  w?: string;
-  kv?: string;
-  r?: number;
-  p?: string;
+const STORAGE = { pinned: "kv-estimator:pinned", imported: "kv-estimator:imported", tab: "kv-estimator:tab" };
+const TABS = [
+  { id: "detail", label: "Détail" },
+  { id: "perf", label: "Débit" },
+  { id: "sizing", label: "Dimensionnement" },
+  { id: "compare", label: "Comparaison" },
+  { id: "import", label: "Importer un modèle" },
+] as const;
+type TabId = (typeof TABS)[number]["id"];
+
+function readStorage<T>(key: string, fallback: T): T {
+  try {
+    const v = window.localStorage.getItem(key);
+    return v ? (JSON.parse(v) as T) : fallback;
+  } catch {
+    return fallback;
+  }
 }
-
-interface State {
-  modelId: string;
-  ctxIdx: number;
-  gpuId: string;
-  gpuCount: number;
-  wf: string;
-  kf: string;
-  reservePct: number;
-  par: Parallelism;
+function writeStorage(key: string, value: unknown) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // stockage indisponible (navigation privée…) : sans conséquence
+  }
 }
 
 const usable = (s: Support) => s.level !== "unsupported";
 
-/** Format de poids : natif du modèle si possible, sinon le plus proche disponible sur le GPU. */
-function pickWeightFormat(cfg: AppConfig, m: ModelSpec, g: GpuSpec, current?: string): string {
-  if (current && usable(supportOf(g.weightFormats, current))) return current;
-  const native = m.nativeWeightFormat;
-  if (usable(supportOf(g.weightFormats, native))) return native;
-  // Repli : BF16 → FP16 sur Volta, sinon premier format officiel puis premier format natif du GPU.
-  if (native === "bf16" && usable(supportOf(g.weightFormats, "fp16"))) return "fp16";
-  const official = m.officialWeightFormats.find((f) => supportOf(g.weightFormats, f).level === "native");
-  if (official) return official;
-  return cfg.weightFormats.find((f) => supportOf(g.weightFormats, f.id).level === "native")?.id ?? cfg.weightFormats[0].id;
-}
-
-function pickKvFormat(cfg: AppConfig, g: GpuSpec, current?: string): string {
-  if (current && usable(supportOf(g.kvCacheFormats, current))) return current;
-  for (const id of ["bf16", "fp16"]) if (supportOf(g.kvCacheFormats, id).level === "native") return id;
-  return cfg.kvCacheFormats.find((f) => usable(supportOf(g.kvCacheFormats, f.id)))?.id ?? cfg.kvCacheFormats[0].id;
-}
-
-function nearestCtxIdx(tokens: number | undefined): number {
-  if (!tokens) return 2;
-  let best = 0;
-  CONTEXT_STEPS.forEach((t, i) => {
-    if (Math.abs(Math.log2(t / tokens)) < Math.abs(Math.log2(CONTEXT_STEPS[best] / tokens))) best = i;
-  });
-  return best;
-}
-
-function initState(cfg: AppConfig, init: InitialState): State {
-  const d = cfg.defaults;
-  const model = cfg.models.find((m) => m.id === init.model) ?? cfg.models.find((m) => m.id === d.model) ?? cfg.models[0];
-  const gpu = cfg.gpus.find((g) => g.id === init.gpu) ?? cfg.gpus.find((g) => g.id === d.gpu) ?? cfg.gpus[0];
-  const n = init.n && init.n >= 1 && init.n <= 8 ? Math.round(init.n) : (d.gpuCount ?? 1);
-  const par: Parallelism = init.p === "pp" || init.p === "dp-attention" ? init.p : "tp";
-  return {
-    modelId: model.id,
-    gpuId: gpu.id,
-    gpuCount: n,
-    ctxIdx: nearestCtxIdx(init.ctx ?? d.contextTokens),
-    wf: pickWeightFormat(cfg, model, gpu, init.w),
-    kf: pickKvFormat(cfg, gpu, init.kv ?? d.kvCacheFormat),
-    reservePct: init.r !== undefined && init.r >= 0 && init.r <= 50 ? init.r : (d.reservePct ?? 10),
-    par: par === "dp-attention" && !isMoE(model) ? "tp" : par,
-  };
-}
-
-const SEVERITY_ICON: Record<Issue["severity"], string> = { error: "⛔", warning: "⚠️", info: "ℹ️" };
-
-export function Estimator({ config, configPath, initial }: { config: AppConfig; configPath: string; initial: InitialState }) {
-  const [s, setS] = useState<State>(() => initState(config, initial));
+export function Estimator({ config, configPath, initial }: { config: AppConfig; configPath: string; initial: QueryParams }) {
+  const [imported, setImported] = useState<ModelSpec[]>([]);
+  const models = useMemo(() => [...config.models, ...imported], [config.models, imported]);
+  const [s, setS] = useState<Scenario>(() => scenarioFromQuery(config, config.models, initial));
   const [notices, setNotices] = useState<string[]>([]);
+  const [pinned, setPinned] = useState<Scenario[]>([]);
+  const [tab, setTab] = useState<TabId>("detail");
+  const [linkCopied, setLinkCopied] = useState(false);
 
-  const model = config.models.find((m) => m.id === s.modelId)!;
+  // --- Données propres au navigateur (après hydratation)
+  useEffect(() => {
+    const imp = readStorage<ModelSpec[]>(STORAGE.imported, []);
+    setImported(imp);
+    setPinned(readStorage<Scenario[]>(STORAGE.pinned, []));
+    const t = readStorage<TabId>(STORAGE.tab, "detail");
+    if (TABS.some((x) => x.id === t)) setTab(t);
+    // Lien vers un modèle importé dans ce navigateur.
+    if (initial.model && imp.some((m) => m.id === initial.model)) setS(scenarioFromQuery(config, [...config.models, ...imp], initial));
+  }, []);
+  useEffect(() => {
+    window.history.replaceState(null, "", `?${scenarioToQuery(s)}`);
+    setLinkCopied(false);
+  }, [s]);
+
+  const model = models.find((m) => m.id === s.modelId) ?? models[0];
   const gpu = config.gpus.find((g) => g.id === s.gpuId)!;
+  const engine = config.engines.find((e) => e.id === s.engineId)!;
   const wf = config.weightFormats.find((f) => f.id === s.wf)!;
   const kf = config.kvCacheFormats.find((f) => f.id === s.kf)!;
-  const ctx = CONTEXT_STEPS[s.ctxIdx];
+  const ctx = s.ctx;
 
-  // --- Changements avec ajustement automatique des formats
+  // --- Changements avec ajustement automatique
+  const dpAllowed = (m: ModelSpec, e: EngineSpec) => isMoE(m) && e.features.dpAttention;
+
+  /** Formats après changement de GPU ou de moteur : garde le choix courant si possible, revient au natif si le choix était un repli. */
+  const adjustFormats = (m: ModelSpec, g: GpuSpec, e: EngineSpec, msgs: string[]) => {
+    let nextWf = pickWeightFormat(config, m, g, e, s.wf);
+    const native = config.weightFormats.find((f) => f.id === m.nativeWeightFormat);
+    if (nextWf === s.wf && native && wf.bitsPerParam > native.bitsPerParam && usable(weightSupport(g, e, native.id)) && s.wf !== native.id) {
+      nextWf = native.id;
+      msgs.push(`Format natif ${native.label} disponible → ${native.label}.`);
+    } else if (nextWf !== s.wf) msgs.push(`Poids ${wf.label} non supportés (${g.name}, ${e.name}) → ${nextWf.toUpperCase()}.`);
+    let nextKf = pickKvFormat(config, g, e, s.kf);
+    // FP16 imposé par l'absence de BF16 (Volta) : retour en BF16 dès que possible.
+    if (nextKf === "fp16" && !usable(kvSupport(gpu, engine, "bf16")) && kvSupport(g, e, "bf16").level === "native") nextKf = "bf16";
+    if (nextKf !== s.kf) msgs.push(usable(kvSupport(g, e, s.kf)) ? "KV BF16 disponible → BF16." : `KV ${kf.label} non supporté → ${nextKf.toUpperCase()}.`);
+    return { wf: nextWf, kf: nextKf };
+  };
+
   const setModel = (id: string) => {
-    const m = config.models.find((x) => x.id === id)!;
-    const nextWf = pickWeightFormat(config, m, gpu);
+    const m = models.find((x) => x.id === id)!;
     const msgs: string[] = [];
-    let par = s.par;
-    if (par === "dp-attention" && !isMoE(m)) {
-      par = "tp";
-      msgs.push("DP-attention réservé aux MoE → retour en TP.");
+    const nextWf = pickWeightFormat(config, m, gpu, engine);
+    if (nextWf !== m.nativeWeightFormat) msgs.push(`Format natif ${m.nativeWeightFormat.toUpperCase()} indisponible → ${nextWf.toUpperCase()}.`);
+    let mode = s.mode;
+    if (mode === "dp-ep" && !dpAllowed(m, engine)) {
+      mode = "tp-pp";
+      msgs.push("DP-attention réservé aux MoE → TP/PP.");
     }
-    if (nextWf !== m.nativeWeightFormat)
-      msgs.push(`Format natif ${m.nativeWeightFormat.toUpperCase()} indisponible sur ${gpu.name} → ${nextWf.toUpperCase()}.`);
     setNotices(msgs);
-    setS({ ...s, modelId: id, wf: nextWf, par });
+    setS({ ...s, modelId: id, wf: nextWf, mode, tp: defaultTp(m, gpu, s.gpuCount) });
   };
   const setGpu = (id: string) => {
     const g = config.gpus.find((x) => x.id === id)!;
-    let nextWf = pickWeightFormat(config, model, g, s.wf);
-    let nextKf = pickKvFormat(config, g, s.kf);
-    // FP16 imposé par l'absence de BF16 (Volta) : on revient en BF16 dès que possible.
-    if (nextKf === "fp16" && !usable(supportOf(gpu.kvCacheFormats, "bf16")) && supportOf(g.kvCacheFormats, "bf16").level === "native")
-      nextKf = "bf16";
     const msgs: string[] = [];
-    const native = config.weightFormats.find((f) => f.id === model.nativeWeightFormat);
-    if (nextWf === s.wf && native && wf.bitsPerParam > native.bitsPerParam && usable(supportOf(g.weightFormats, native.id))) {
-      // Le format courant était un repli plus lourd que le natif (ex. FP16 forcé par un V100).
-      nextWf = native.id;
-      msgs.push(`Format natif ${native.label} disponible sur ${g.name} → ${native.label}.`);
-    } else if (nextWf !== s.wf) msgs.push(`Poids ${wf.label} non supportés sur ${g.name} → ${nextWf.toUpperCase()}.`);
-    if (nextKf !== s.kf)
-      msgs.push(
-        usable(supportOf(g.kvCacheFormats, s.kf))
-          ? `KV BF16 disponible sur ${g.name} → BF16.`
-          : `KV ${kf.label} non supporté sur ${g.name} → ${nextKf.toUpperCase()}.`,
-      );
+    const counts = gpuCountOptions(config, g);
+    const n = counts.includes(s.gpuCount) ? s.gpuCount : 8;
+    if (n !== s.gpuCount) msgs.push(`${s.gpuCount} GPUs non proposé pour ${g.name} → ${n}.`);
+    const f = adjustFormats(model, g, engine, msgs);
     setNotices(msgs);
-    setS({ ...s, gpuId: id, wf: nextWf, kf: nextKf });
+    setS({ ...s, gpuId: id, gpuCount: n, tp: defaultTp(model, g, n), ...f });
   };
-  const update = (patch: Partial<State>) => {
+  const setEngine = (id: string) => {
+    const e = config.engines.find((x) => x.id === id)!;
+    const msgs: string[] = [];
+    const f = adjustFormats(model, gpu, e, msgs);
+    let mode = s.mode;
+    if (mode === "dp-ep" && !dpAllowed(model, e)) {
+      mode = "tp-pp";
+      msgs.push(`DP-attention indisponible dans ${e.name} → TP/PP.`);
+    }
+    setNotices(msgs);
+    setS({ ...s, engineId: id, mode, ...f });
+  };
+  const update = (patch: Partial<Scenario>) => {
     setNotices([]);
     setS({ ...s, ...patch });
   };
-
-  // --- Partage de l'état dans l'URL
-  useEffect(() => {
-    const q = new URLSearchParams({
-      model: s.modelId,
-      ctx: String(ctx),
-      gpu: s.gpuId,
-      n: String(s.gpuCount),
-      w: s.wf,
-      kv: s.kf,
-      r: String(s.reservePct),
-      p: s.par,
-    });
-    window.history.replaceState(null, "", `?${q}`);
-  }, [s, ctx]);
-
-  const input: EstimateInput = {
-    model,
-    gpu,
-    gpuCount: s.gpuCount,
-    contextTokens: ctx,
-    weightFormat: wf,
-    kvFormat: kf,
-    reservePct: s.reservePct,
-    parallelism: s.par,
+  const loadScenario = (next: Scenario) => {
+    const fixed = scenarioFromQuery(config, models, Object.fromEntries(new URLSearchParams(scenarioToQuery(next))));
+    setNotices([]);
+    setS(fixed);
   };
-  const est = estimate(input);
-  const issues = collectIssues(input, est, config.weightFormats);
+  const applySizing = (c: SizingChoice) => {
+    setNotices([`Configuration appliquée depuis le dimensionnement.`]);
+    setS({ ...s, ...c });
+  };
 
-  const byContext = useMemo(
-    () => CONTEXT_STEPS.map((t) => ({ t, e: estimate({ ...input, contextTokens: t }) })),
-    [model, gpu, wf, kf, s.gpuCount, s.reservePct, s.par],
-  );
+  const pin = () => {
+    const next = [...pinned, s].slice(-6);
+    setPinned(next);
+    writeStorage(STORAGE.pinned, next);
+    setTab("compare");
+    writeStorage(STORAGE.tab, "compare");
+  };
+  const unpin = (i: number) => {
+    const next = pinned.filter((_, k) => k !== i);
+    setPinned(next);
+    writeStorage(STORAGE.pinned, next);
+  };
+  const addImported = (m: ModelSpec) => {
+    const next = [...imported.filter((x) => x.id !== m.id), { ...m, family: m.family || "Importé" }];
+    setImported(next);
+    writeStorage(STORAGE.imported, next);
+    const nextWf = pickWeightFormat(config, m, gpu, engine);
+    setNotices([`${m.name} ajouté à la liste des modèles.`]);
+    setS({ ...s, modelId: m.id, wf: nextWf, mode: s.mode === "dp-ep" && !dpAllowed(m, engine) ? "tp-pp" : s.mode, tp: defaultTp(m, gpu, s.gpuCount) });
+  };
+  const clearImported = () => {
+    setImported([]);
+    writeStorage(STORAGE.imported, []);
+    if (imported.some((m) => m.id === s.modelId)) setModel(config.models[0].id);
+  };
+  const selectTab = (t: TabId) => {
+    setTab(t);
+    writeStorage(STORAGE.tab, t);
+  };
+
+  // --- Calculs
+  const input = useMemo(() => resolveScenario(config, models, { ...s, modelId: model.id })!, [config, models, s, model.id]);
+  const est = useMemo(() => estimate(input), [input]);
+  const issues = useMemo(() => collectIssues(input, est, config.weightFormats), [input, est, config.weightFormats]);
+  const perf = useMemo(() => estimatePerf(input, est, config.performance), [input, est, config.performance]);
+  const byContext = useMemo(() => CONTEXT_STEPS.map((t) => ({ t, e: estimate({ ...input, contextTokens: t }) })), [input]);
+  const command = launchCommand(input, est.tp, est.pp);
 
   // --- Options
   const weightOptions: ChipOption[] = config.weightFormats.map((f) => {
-    const sup = supportOf(gpu.weightFormats, f.id);
+    const sup = weightSupport(gpu, engine, f.id);
     const official = model.officialWeightFormats.includes(f.id);
+    const bits = f.id === model.nativeWeightFormat && model.nativeBitsPerParam ? model.nativeBitsPerParam : f.bitsPerParam;
     return {
       id: f.id,
       label: f.label,
-      sub: `${f.bitsPerParam} bits${official ? " · officiel" : ""}`,
+      sub: `${bits} bits${official ? " · officiel" : ""}`,
       level: sup.level,
       star: f.id === model.nativeWeightFormat,
       warn: model.weightFormatNotes[f.id] !== undefined,
-      title: [f.description, sup.level !== "native" ? `${supportLevelLabel(sup.level)} sur ${gpu.name}` : null, sup.note, model.weightFormatNotes[f.id]?.note]
-        .filter(Boolean)
-        .join("\n"),
+      title: [f.description, sup.level !== "native" ? supportLevelLabel(sup.level) : null, sup.note, model.weightFormatNotes[f.id]?.note].filter(Boolean).join("\n"),
     };
   });
   const kvOptions: ChipOption[] = config.kvCacheFormats.map((f) => {
-    const sup = supportOf(gpu.kvCacheFormats, f.id);
+    const sup = kvSupport(gpu, engine, f.id);
     return {
       id: f.id,
       label: f.label,
       sub: `${f.bytesPerElement * 8} bits`,
       level: sup.level,
       warn: model.kvFormatNotes[f.id] !== undefined,
-      title: [f.description, sup.level !== "native" ? `${supportLevelLabel(sup.level)} sur ${gpu.name}` : null, sup.note].filter(Boolean).join("\n"),
+      title: [f.description, sup.level !== "native" ? supportLevelLabel(sup.level) : null, sup.note].filter(Boolean).join("\n"),
     };
   });
   const gpuOptions: ChipOption[] = config.gpus.map((g) => ({
@@ -210,60 +224,127 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
       <>
         {g.memoryLabel.split(" (")[0]}
         <br />
-        <span className={g.interconnect.nvlink ? "" : "no-link"}>{g.interconnect.nvlink ? (g.nvlinkDomain > 8 ? "NVL72" : "NVLink") : "PCIe, sans NVLink"}</span>
+        <span className={g.interconnect.nvlink ? "" : "no-link"}>{g.interconnect.nvlink ? (g.nvlinkDomain > 8 ? "NVL72" : "NVLink") : "sans NVLink GPU↔GPU"}</span>
       </>
     ),
-    title: `${g.architecture} (sm ${g.computeCapability}) · ${g.memoryLabel} · ${g.interconnect.label}`,
+    title: `${g.architecture} (sm ${g.computeCapability}) · ${g.memoryLabel} · ${g.bandwidthTBs} To/s · ${g.interconnect.label}`,
   }));
-  const countOptions: ChipOption[] = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
+  const countOptions: ChipOption[] = gpuCountOptions(config, gpu).map((n) => {
     const reasons: string[] = [];
-    if (n > 1 && s.par === "tp" && model.attentionHeads % n !== 0) reasons.push(`TP=${n} : ${model.attentionHeads} têtes non divisibles`);
     if (n > 1 && !gpu.interconnect.nvlink) reasons.push("pas de NVLink");
-    if (n > gpu.maxGpusPerNode) reasons.push(`> ${gpu.maxGpusPerNode} GPU/nœud`);
-    return { id: String(n), label: String(n), warn: reasons.length > 0, title: reasons.join(" · ") || undefined };
+    if (n > gpu.maxGpusPerNode) reasons.push(`${Math.ceil(n / gpu.maxGpusPerNode)} nœuds`);
+    const sameDomain = gpu.interconnect.nvlink && n <= gpu.nvlinkDomain;
+    return {
+      id: String(n),
+      label: String(n),
+      warn: n > 1 && (!gpu.interconnect.nvlink || (n > gpu.maxGpusPerNode && !sameDomain)),
+      title: [reasons.join(" · "), sameDomain && n > gpu.maxGpusPerNode ? "même domaine NVLink" : ""].filter(Boolean).join(" — ") || undefined,
+    };
   });
-  const parOptions: ChipOption[] = (["tp", "pp", "dp-attention"] as Parallelism[]).map((p) => ({
-    id: p,
-    label: PARALLELISM_LABELS[p],
-    level: p === "dp-attention" && !isMoE(model) ? "unsupported" : undefined,
-    title:
-      p === "tp"
-        ? "Chaque couche répartie sur tous les GPUs (all-reduce à chaque couche, NVLink recommandé)."
-        : p === "pp"
-          ? "Couches réparties en étages successifs : pas de duplication du KV, peu de communication."
-          : isMoE(model)
-            ? "Attention répliquée, requêtes réparties par GPU, experts en expert-parallel (SGLang / vLLM)."
-            : "Réservé aux modèles MoE.",
+  const modeOptions: ChipOption[] = [
+    { id: "tp-pp", label: "TP / PP", title: "Tensor parallel dans un étage, pipeline parallel entre étages." },
+    {
+      id: "dp-ep",
+      label: "DP-attention + EP",
+      level: dpAllowed(model, engine) ? undefined : "unsupported",
+      title: !isMoE(model) ? "Réservé aux modèles MoE." : !engine.features.dpAttention ? `Indisponible dans ${engine.name}.` : "Attention répliquée, requêtes réparties par GPU, experts en expert-parallel.",
+    },
+  ];
+  const tpOptions: ChipOption[] = divisors(s.gpuCount).map((d) => {
+    const valid = isValidTp(model, d);
+    const crosses = d > maxTp(gpu);
+    return {
+      id: String(d),
+      label: `TP ${d}`,
+      sub: `PP ${s.gpuCount / d}`,
+      level: valid ? undefined : "unsupported",
+      warn: valid && (crosses || (d > 1 && !gpu.interconnect.nvlink)),
+      title: !valid
+        ? `${model.attentionHeads} têtes d'attention / têtes KV non divisibles par ${d}`
+        : crosses
+          ? `TP au-delà du domaine ${gpu.interconnect.nvlink ? "NVLink" : "du serveur"}`
+          : d > 1 && !gpu.interconnect.nvlink
+            ? "TP via PCIe : lent"
+            : undefined,
+    };
+  });
+  const engineOptions: ChipOption[] = config.engines.map((e) => ({
+    id: e.id,
+    label: e.name,
+    sub: e.confidence === "high" ? undefined : "profil à compléter",
+    warn: e.confidence !== "high",
+    title: [e.description, ...e.notes].filter(Boolean).join("\n"),
   }));
 
-  const limitationLine = (map: Record<string, Support>, formats: { id: string; label: string }[]) => {
-    const un = formats.filter((f) => supportOf(map, f.id).level === "unsupported").map((f) => f.label);
-    const lim = formats.filter((f) => supportOf(map, f.id).level === "limited").map((f) => f.label);
-    if (!un.length && !lim.length) return <p className="hint ok">Tous les formats sont supportés nativement sur {gpu.name}.</p>;
+  const limitationLine = (supports: { label: string; s: Support }[]) => {
+    const un = supports.filter((x) => x.s.level === "unsupported").map((x) => x.label);
+    const lim = supports.filter((x) => x.s.level === "limited").map((x) => x.label);
+    if (!un.length && !lim.length) return <p className="hint ok">Tous les formats sont supportés nativement ({gpu.name}, {engine.name}).</p>;
     return (
       <p className="hint">
-        Sur {gpu.name} : {un.length > 0 && <span className="lim-un">✕ {un.join(", ")} non supporté{un.length > 1 ? "s" : ""}</span>}
+        {gpu.name} · {engine.name} : {un.length > 0 && <span className="lim-un">✕ {un.join(", ")} non supporté{un.length > 1 ? "s" : ""}</span>}
         {un.length > 0 && lim.length > 0 && " · "}
-        {lim.length > 0 && <span className="lim-lim">⚠ {lim.join(", ")} limité{lim.length > 1 ? "s" : ""} (émulation ou débit réduit)</span>}
+        {lim.length > 0 && <span className="lim-lim">⚠ {lim.join(", ")} limité{lim.length > 1 ? "s" : ""}</span>}
+        <span className="muted"> (survol pour le détail)</span>
       </p>
     );
   };
 
   const maxCtx = model.maxContextExtended ?? model.maxContext;
   const replicated = est.kv.perRequestClusterBytes > est.kv.perRequestBytes * 1.001;
-  const sessionsPerGpu = s.par === "dp-attention" ? est.sessions / s.gpuCount : est.sessions;
-  const kvUsedPerGpu = sessionsPerGpu * est.kv.perRequestPerGpuBytes;
-  const hasError = issues.some((i) => i.severity === "error");
+  const memGiB = s.memGiB ?? gpu.memoryGiB;
+
+  const exportJson = () => {
+    const data = {
+      generatedAt: new Date().toISOString(),
+      url: window.location.href,
+      scenario: s,
+      model: { id: model.id, name: model.name, source: model.source, revision: model.revision },
+      gpu: { id: gpu.id, name: gpu.name, memoryGiB: memGiB },
+      engine: engine.name,
+      parallelism: { mode: s.mode, tp: est.tp, pp: est.pp, gpuCount: s.gpuCount },
+      results: {
+        weightsGiB: est.weights.totalBytes / GIB,
+        weightsPerGpuGiB: est.weights.perGpuBytes / GIB,
+        kvPerRequestGiB: est.kv.perRequestBytes / GIB,
+        kvPerRequestClusterGiB: est.kv.perRequestClusterBytes / GIB,
+        modelPlusOneKvGiB: est.modelPlusOneKvBytes / GIB,
+        freeKvTotalGiB: est.memory.freeForKvTotalBytes / GIB,
+        sessions: est.sessions,
+        offloadParkedSessions: est.offload.parkedSessions,
+        decodeTokPerSecSingle: perf.single.tokPerSecPerSession,
+        decodeTokPerSecFullLoad: perf.full?.tokPerSecTotal ?? null,
+        prefillSeconds: perf.prefillSeconds,
+      },
+      issues,
+      command,
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `kv-${model.id}-${s.gpuCount}x${gpu.id}-${contextLabel(ctx)}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setLinkCopied(true);
+    } catch {
+      setLinkCopied(false);
+    }
+  };
 
   return (
     <div className="page">
       <header className="header">
         <div>
           <h1>Estimateur KV cache</h1>
-          <p className="subtitle">Mémoire des poids et du KV cache pour les LLM open-weight sur GPU NVIDIA</p>
+          <p className="subtitle">Mémoire des poids et du KV cache, sessions et débit pour les LLM open-weight sur GPU NVIDIA</p>
         </div>
         <p className="config-path" title={configPath}>
-          {config.models.length} modèles · {config.gpus.length} GPUs · <code>{configPath.split("/").slice(-2).join("/")}</code>
+          {config.models.length} modèles{imported.length ? ` + ${imported.length} importé${imported.length > 1 ? "s" : ""}` : ""} · {config.gpus.length} GPUs ·{" "}
+          {config.engines.length} moteurs · <code>{configPath.split("/").slice(-2).join("/")}</code>
         </p>
       </header>
 
@@ -272,7 +353,7 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
         <section className="panel form" aria-label="Paramètres">
           <div className="field">
             <label className="field-label">Modèle</label>
-            <ModelCombobox models={config.models} value={s.modelId} onChange={setModel} />
+            <ModelCombobox models={models} value={model.id} onChange={setModel} />
             <ModelCard model={model} />
           </div>
 
@@ -287,17 +368,17 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
               min={0}
               max={CONTEXT_STEPS.length - 1}
               step={1}
-              value={s.ctxIdx}
-              onChange={(e) => update({ ctxIdx: Number(e.target.value) })}
+              value={CONTEXT_STEPS.indexOf(ctx)}
+              onChange={(e) => update({ ctx: CONTEXT_STEPS[Number(e.target.value)] })}
               className={ctx > maxCtx ? "range-error" : ctx > model.maxContext ? "range-warn" : ""}
             />
             <div className="ticks">
-              {CONTEXT_STEPS.map((t, i) => (
+              {CONTEXT_STEPS.map((t) => (
                 <button
                   key={t}
                   type="button"
-                  className={`tick${i === s.ctxIdx ? " current" : ""}${t > maxCtx ? " over" : t > model.maxContext ? " ext" : ""}`}
-                  onClick={() => update({ ctxIdx: i })}
+                  className={`tick${t === ctx ? " current" : ""}${t > maxCtx ? " over" : t > model.maxContext ? " ext" : ""}`}
+                  onClick={() => update({ ctx: t })}
                   title={t > maxCtx ? "Au-delà du maximum du modèle" : t > model.maxContext ? "Nécessite une extension RoPE (YaRN)" : undefined}
                 >
                   {contextLabel(t)}
@@ -327,29 +408,47 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
           <div className="field">
             <label className="field-label">
               Nombre de cartes <strong className="value">{s.gpuCount}</strong>
-              <span className="muted"> · {fmtBytes(gpu.memoryGiB * 1024 ** 3 * s.gpuCount)} au total</span>
+              <span className="muted"> · {fmtBytes(memGiB * GIB * s.gpuCount)} au total</span>
             </label>
-            <ChipGroup label="Nombre de cartes" options={countOptions} value={String(s.gpuCount)} onChange={(v) => update({ gpuCount: Number(v) })} className="count" />
+            <ChipGroup
+              label="Nombre de cartes"
+              options={countOptions}
+              value={String(s.gpuCount)}
+              onChange={(v) => update({ gpuCount: Number(v), tp: defaultTp(model, gpu, Number(v)) })}
+              className="count"
+            />
             {s.gpuCount > 1 && (
               <>
                 <label className="field-label sub">Parallélisme</label>
-                <ChipGroup label="Parallélisme" options={parOptions} value={s.par} onChange={(v) => update({ par: v as Parallelism })} />
+                <ChipGroup label="Parallélisme" options={modeOptions} value={s.mode} onChange={(v) => update({ mode: v as ParallelMode })} />
+                {s.mode === "tp-pp" && (
+                  <ChipGroup label="Degré de TP" options={tpOptions} value={String(s.tp)} onChange={(v) => update({ tp: Number(v) })} className="count" />
+                )}
               </>
             )}
-            <p className={`hint ${gpu.interconnect.nvlink ? "" : "lim-lim"}`}>Interconnexion : {gpu.interconnect.label}</p>
+            <p className={`hint ${gpu.interconnect.nvlink ? "" : "lim-lim"}`}>
+              Interconnexion : {gpu.interconnect.label}
+              {gpu.nvlinkDomain > 8 && ` · ${gpu.maxGpusPerNode} GPUs par tray`}
+            </p>
+          </div>
+
+          <div className="field">
+            <label className="field-label">Moteur d&apos;inférence</label>
+            <ChipGroup label="Moteur" options={engineOptions} value={s.engineId} onChange={setEngine} />
+            {engine.description && <p className="hint">{engine.description}</p>}
           </div>
 
           <div className="field">
             <label className="field-label">Format des poids</label>
             <ChipGroup label="Format des poids" options={weightOptions} value={s.wf} onChange={(v) => update({ wf: v })} />
-            {limitationLine(gpu.weightFormats, config.weightFormats)}
+            {limitationLine(config.weightFormats.map((f) => ({ label: f.label, s: weightSupport(gpu, engine, f.id) })))}
             <p className="hint">★ format natif du modèle · « officiel » : checkpoint publié par l&apos;éditeur</p>
           </div>
 
           <div className="field">
             <label className="field-label">Format du KV cache</label>
             <ChipGroup label="Format du KV cache" options={kvOptions} value={s.kf} onChange={(v) => update({ kf: v })} />
-            {limitationLine(gpu.kvCacheFormats, config.kvCacheFormats)}
+            {limitationLine(config.kvCacheFormats.map((f) => ({ label: f.label, s: kvSupport(gpu, engine, f.id) })))}
           </div>
 
           <div className="field">
@@ -359,15 +458,68 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
             </label>
             <input id="reserve" type="range" min={0} max={30} step={1} value={s.reservePct} onChange={(e) => update({ reservePct: Number(e.target.value) })} />
             <p className="hint">
-              Activations, graphes CUDA, contexte CUDA, fragmentation. Équivaut à vLLM <code>--gpu-memory-utilization {(1 - s.reservePct / 100).toFixed(2)}</code>.
+              Activations, graphes CUDA, contexte CUDA, fragmentation.
+              {engine.flags.memoryUtilization && (
+                <>
+                  {" "}
+                  Équivaut à <code>{engine.flags.memoryUtilization} {(1 - s.reservePct / 100).toFixed(2)}</code>.
+                </>
+              )}
             </p>
           </div>
+
+          <details className="field advanced" open={s.memGiB !== undefined || s.offloadGiB > 0}>
+            <summary className="field-label">Options avancées</summary>
+            <label className="inline-form">
+              <span>Mémoire visible par GPU</span>
+              <input
+                type="number"
+                step="0.1"
+                min={1}
+                value={s.memGiB ?? ""}
+                placeholder={String(gpu.memoryGiB)}
+                onChange={(e) => update({ memGiB: e.target.value ? Number(e.target.value) : undefined })}
+              />
+              <span className="muted">Gio (nvidia-smi MiB ÷ 1024)</span>
+            </label>
+            <label className="inline-form">
+              <span>Offload KV vers la RAM CPU</span>
+              <input type="number" min={0} step={16} value={s.offloadGiB || ""} placeholder="0" onChange={(e) => update({ offloadGiB: Math.max(0, Number(e.target.value) || 0) })} />
+              <span className="muted">Gio par GPU</span>
+            </label>
+            {gpu.hostMemoryGiBPerGpu > 0 && s.offloadGiB !== gpu.hostMemoryGiBPerGpu && (
+              <button type="button" className="link" onClick={() => update({ offloadGiB: gpu.hostMemoryGiBPerGpu })}>
+                Utiliser la mémoire Grace ({fmtInt(gpu.hostMemoryGiBPerGpu)} Gio par GPU)
+              </button>
+            )}
+            {!engine.features.kvOffload && <p className="hint lim-lim">Offload non disponible dans {engine.name}.</p>}
+            <p className="hint">
+              Lien CPU↔GPU : {gpu.hostLinkLabel} ({gpu.hostLinkGBs} Go/s). {engine.flags.kvOffload && <>Option : {engine.flags.kvOffload}.</>}
+            </p>
+          </details>
         </section>
 
         {/* ------------------------------------------------ Résultats */}
         <section className="results" aria-label="Résultats">
+          <div className="toolbar">
+            <button type="button" className="btn" onClick={pin} disabled={pinned.length >= 6} title="Ajouter à la comparaison">
+              📌 Épingler
+            </button>
+            <button type="button" className="btn" onClick={copyLink}>
+              {linkCopied ? "✓ Lien copié" : "🔗 Copier le lien"}
+            </button>
+            <button type="button" className="btn" onClick={exportJson}>
+              ⬇ Export JSON
+            </button>
+          </div>
+
           <div className="kpis">
-            <Kpi title="Poids du modèle" value={fmtBytes(est.weights.totalBytes)} sub={s.gpuCount > 1 ? `${fmtBytes(est.weights.perGpuBytes)} par GPU` : `${wf.label} · ${fmtParams(model.paramsB)} paramètres`} tone={est.fitsWeights ? undefined : "bad"} />
+            <Kpi
+              title="Poids du modèle"
+              value={fmtBytes(est.weights.totalBytes)}
+              sub={s.gpuCount > 1 ? `${fmtBytes(est.weights.perGpuBytes)} par GPU` : `${wf.label} · ${fmtParams(model.paramsB)} paramètres`}
+              tone={est.fitsWeights ? undefined : "bad"}
+            />
             <Kpi
               title="KV par requête"
               value={fmtBytes(est.kv.perRequestBytes)}
@@ -384,255 +536,92 @@ export function Estimator({ config, configPath, initial }: { config: AppConfig; 
               title="KV total disponible"
               value={fmtBytes(est.memory.freeForKvTotalBytes)}
               big={`${fmtInt(est.sessions)} session${est.sessions > 1 ? "s" : ""}`}
-              sub={est.sessions > 0 ? `à ${contextLabel(ctx)} · ≈ ${fmtTokens(est.sessions * ctx)} tokens cumulés` : "aucune session complète"}
+              sub={
+                est.sessions > 0
+                  ? `à ${contextLabel(ctx)} · ≈ ${fmtTokens(est.sessions * ctx)} tokens cumulés${est.offload.parkedSessions ? ` · +${fmtInt(est.offload.parkedSessions)} en RAM CPU` : ""}`
+                  : "aucune session complète"
+              }
               tone={est.sessions > 0 ? "good" : "bad"}
             />
           </div>
 
-          <MemoryBar
-            gpuBytes={est.memory.gpuBytes}
-            weights={est.weights.perGpuBytes}
-            kvUsed={kvUsedPerGpu}
-            free={est.memory.freeForKvPerGpuBytes - kvUsedPerGpu}
-            reserve={est.memory.reservePerGpuBytes}
-            sessionsPerGpu={sessionsPerGpu}
-            gpuCount={s.gpuCount}
-          />
-
-          {(issues.length > 0 || notices.length > 0) && (
-            <div className={`panel issues${hasError ? " has-error" : ""}`}>
-              <h2>Limitations et avertissements</h2>
-              <ul>
-                {notices.map((n) => (
-                  <li key={n} className="issue notice">
-                    <span aria-hidden>🔁</span>
-                    <div>
-                      <strong>Ajusté automatiquement</strong>
-                      <p>{n}</p>
-                    </div>
-                  </li>
-                ))}
-                {issues.map((i) => (
-                  <li key={i.title} className={`issue ${i.severity}`}>
-                    <span aria-hidden>{SEVERITY_ICON[i.severity]}</span>
-                    <div>
-                      <strong>{i.title}</strong>
-                      {i.detail && <p>{i.detail}</p>}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          <div className="panel">
-            <h2>Détail du KV par requête ({contextLabel(ctx)})</h2>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Couches</th>
-                  <th>Type</th>
-                  <th>Détail</th>
-                  <th className="num">Par requête</th>
-                  {s.gpuCount > 1 && <th className="num">Par GPU</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {est.kv.groups.map((g, i) => (
-                  <tr key={i}>
-                    <td>{g.count}</td>
-                    <td>{g.label}</td>
-                    <td className="muted">{g.detail}</td>
-                    <td className="num">{fmtBytes(g.bytes)}</td>
-                    {s.gpuCount > 1 && (
-                      <td className="num">
-                        {fmtBytes(g.perGpuBytes)}
-                        {g.replication > 1 && <span className="tag tag-warn">×{g.replication} répliqué</span>}
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td colSpan={2}>Total</td>
-                  <td />
-                  <td className="num">{fmtBytes(est.kv.perRequestBytes)}</td>
-                  {s.gpuCount > 1 && <td className="num">{fmtBytes(est.kv.perRequestPerGpuBytes)}</td>}
-                </tr>
-              </tfoot>
-            </table>
-            {est.kv.perTokenBytes > 0 && (
-              <p className="hint">
-                {fmtInt(est.kv.perTokenBytes / 1024)} Kio par token sur les couches à contexte complet
-                {est.kv.constantBytes > 0 && <> · {fmtBytes(est.kv.constantBytes)} d&apos;état constant</>}.
-              </p>
+          <button type="button" className="perf-strip" onClick={() => selectTab("perf")} title="Voir le détail du débit">
+            <span>
+              ⚡ Débit estimé : <strong>{fmtRate(perf.single.tokPerSecPerSession)}</strong> pour 1 session
+            </span>
+            {perf.full && (
+              <span>
+                · <strong>{fmtRate(perf.full.tokPerSecTotal)}</strong> agrégés à pleine charge
+              </span>
             )}
-          </div>
+            <span>
+              · prefill {contextLabel(ctx)} ≈ <strong>{fmtDuration(perf.prefillSeconds)}</strong>
+            </span>
+          </button>
+
+          <MemoryBar est={est} gpuCount={s.gpuCount} />
+
+          <IssuesPanel issues={issues} notices={notices} />
 
           <div className="panel">
-            <h2>Sessions selon le contexte</h2>
-            <SessionsChart rows={byContext} current={ctx} maxNative={model.maxContext} maxExt={maxCtx} onPick={(i) => update({ ctxIdx: i })} />
+            <div className="tabs" role="tablist">
+              {TABS.map((t) => (
+                <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} className={`tab${tab === t.id ? " active" : ""}`} onClick={() => selectTab(t.id)}>
+                  {t.label}
+                  {t.id === "compare" && pinned.length > 0 && <span className="badge">{pinned.length}</span>}
+                </button>
+              ))}
+            </div>
+            <div className="tab-body">
+              {tab === "detail" && (
+                <>
+                  <KvBreakdown est={est} ctx={ctx} gpuCount={s.gpuCount} />
+                  <SessionsChart rows={byContext} current={ctx} maxNative={model.maxContext} maxExt={maxCtx} onPick={(t) => update({ ctx: t })} />
+                  {command && (
+                    <>
+                      <h3>Commande indicative</h3>
+                      <pre className="yaml">{command}</pre>
+                    </>
+                  )}
+                  {engine.notes.length > 0 && (
+                    <ul className="gpu-notes">
+                      {engine.notes.map((n) => (
+                        <li key={n}>{n}</li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
+              {tab === "perf" && <PerfPanel input={input} est={est} perf={config.performance} />}
+              {tab === "sizing" && <SizingPanel config={config} input={input} onApply={applySizing} />}
+              {tab === "compare" && (
+                <ComparePanel config={config} models={models} current={s} pinned={pinned} onPin={pin} onRemove={unpin} onLoad={loadScenario} />
+              )}
+              {tab === "import" && (
+                <ImportPanel existingIds={new Set(models.map((m) => m.id))} imported={imported} onAdd={addImported} onClear={clearImported} />
+              )}
+            </div>
           </div>
 
           <details className="panel assumptions">
             <summary>Hypothèses de calcul</summary>
             <ul>
-              <li>Poids = paramètres × bits du format. Les embeddings, lm_head et l&apos;encodeur vision restent en 16 bits si on quantifie.</li>
-              <li>KV GQA = couches × têtes KV × (dim K + dim V) × octets × tokens. Les couches à fenêtre glissante sont plafonnées à la fenêtre.</li>
-              <li>MLA = couches × (rang latent + dim RoPE) × octets × tokens, sans facteur 2 (K et V partagent le latent).</li>
-              <li>Couches linéaires (Mamba, DeltaNet, KDA) : état fixe par requête, indépendant du contexte.</li>
-              <li>TP : les têtes KV sont réparties entre GPUs et répliquées si TP &gt; têtes KV. Le latent MLA est copié sur chaque GPU.</li>
-              <li>PP : couches réparties de façon homogène, sans duplication. DP-attention : chaque requête vit sur un seul GPU, attention répliquée.</li>
-              <li>Sessions = ⌊mémoire libre par GPU ÷ KV par requête et par GPU⌋, toutes au contexte maximal (cas le plus défavorable). Le prefix caching et les blocs partiels sont ignorés.</li>
-              <li>1 Gio = 2³⁰ octets. La mémoire GPU est celle vue par le driver.</li>
+              <li>Poids = paramètres × bits effectifs du format (échelles incluses). Embeddings, lm_head et encodeur vision restent en 16 bits si on quantifie.</li>
+              <li>KV GQA = couches × têtes KV × (dim K + dim V) × octets × tokens. Fenêtres glissantes plafonnées à la fenêtre si le moteur le gère.</li>
+              <li>MLA = couches × (rang latent + dim RoPE) × octets × tokens (+ indexeur DSA en FP8), sans facteur 2.</li>
+              <li>Couches linéaires (Mamba, DeltaNet, KDA) : état SSM + convolution fixes par requête, en FP32 si le modèle l&apos;impose.</li>
+              <li>TP : têtes KV réparties, répliquées si TP &gt; têtes KV ; latent MLA copié sur chaque rang. PP : couches réparties sans duplication.</li>
+              <li>DP-attention + EP : attention répliquée sur chaque GPU, experts répartis, chaque requête sur un seul GPU.</li>
+              <li>
+                Sessions = ⌊mémoire libre par GPU ÷ KV par requête et par GPU⌋, toutes au contexte maximal (pire cas). Prefix caching et blocs partiels ignorés.
+              </li>
+              <li>Offload CPU : le KV déchargé ne sert qu&apos;aux sessions en attente ou préemptées, il n&apos;augmente pas la concurrence de décodage.</li>
+              <li>Débit : modèle au premier ordre (bande passante, MFU, latences), à calibrer avec des mesures.</li>
+              <li>1 Gio = 2³⁰ octets. Mémoire GPU vue par le driver, modifiable dans les options avancées.</li>
             </ul>
           </details>
         </section>
       </main>
-    </div>
-  );
-}
-
-function ModelCard({ model: m }: { model: ModelSpec }) {
-  const layers = m.layers.reduce((a, g) => a + g.count, 0);
-  return (
-    <div className="model-card">
-      <div className="badges">
-        <span className="tag">{archLabel(m)}</span>
-        {m.tags.filter((t) => t !== "swa" && t !== "hybrid").map((t) => (
-          <span key={t} className="tag">
-            {TAG_LABELS[t] ?? t}
-          </span>
-        ))}
-        {m.confidence !== "high" && (
-          <span className={`tag ${m.confidence === "low" ? "tag-warn" : ""}`} title="Paramètres d'architecture à vérifier dans config.json">
-            fiabilité {m.confidence === "low" ? "faible" : "moyenne"}
-          </span>
-        )}
-      </div>
-      <dl>
-        <div>
-          <dt>Paramètres</dt>
-          <dd>
-            {fmtParams(m.paramsB)}
-            {m.activeParamsB && <span className="muted"> ({fmtParams(m.activeParamsB)} actifs)</span>}
-          </dd>
-        </div>
-        <div>
-          <dt>Couches à cache</dt>
-          <dd>{layers}</dd>
-        </div>
-        <div>
-          <dt>Format natif</dt>
-          <dd>{m.nativeWeightFormat.toUpperCase()}</dd>
-        </div>
-        <div>
-          <dt>Officiels</dt>
-          <dd>{m.officialWeightFormats.map((f) => f.toUpperCase()).join(", ") || "—"}</dd>
-        </div>
-      </dl>
-      {m.notes.length > 0 && (
-        <ul className="model-notes">
-          {m.notes.map((n) => (
-            <li key={n}>{n}</li>
-          ))}
-        </ul>
-      )}
-      {m.source && (
-        <a className="source" href={`https://huggingface.co/${m.source}`} target="_blank" rel="noreferrer">
-          {m.source} ↗
-        </a>
-      )}
-    </div>
-  );
-}
-
-function Kpi({ title, value, sub, big, tone }: { title: string; value: string; sub?: string; big?: string; tone?: "good" | "bad" | "warn" }) {
-  return (
-    <div className={`kpi${tone ? ` ${tone}` : ""}`}>
-      <div className="kpi-title">{title}</div>
-      <div className="kpi-value">{value}</div>
-      {big && <div className="kpi-big">{big}</div>}
-      {sub && <div className="kpi-sub">{sub}</div>}
-    </div>
-  );
-}
-
-function MemoryBar(p: {
-  gpuBytes: number;
-  weights: number;
-  kvUsed: number;
-  free: number;
-  reserve: number;
-  sessionsPerGpu: number;
-  gpuCount: number;
-}) {
-  const overflow = Math.max(0, p.weights - (p.gpuBytes - p.reserve));
-  const scale = p.gpuBytes + overflow;
-  const pct = (b: number) => `${(Math.max(0, b) / scale) * 100}%`;
-  const segs = [
-    { key: "weights", label: "Poids", bytes: Math.min(p.weights, p.gpuBytes - p.reserve) },
-    { key: "overflow", label: "Dépassement", bytes: overflow },
-    { key: "kv", label: `KV (${fmtInt(p.sessionsPerGpu)} session${p.sessionsPerGpu > 1 ? "s" : ""})`, bytes: p.kvUsed },
-    { key: "free", label: "Libre (< 1 session)", bytes: p.free },
-    { key: "reserve", label: "Réserve", bytes: p.reserve },
-  ].filter((s) => s.bytes > 0);
-  return (
-    <div className="panel">
-      <h2>
-        Mémoire d&apos;un GPU <span className="muted">({fmtBytes(p.gpuBytes)}{p.gpuCount > 1 ? ` × ${p.gpuCount}` : ""})</span>
-      </h2>
-      <div className="membar" role="img" aria-label="Répartition de la mémoire d'un GPU">
-        {segs.map((s) => (
-          <div key={s.key} className={`seg seg-${s.key}`} style={{ width: pct(s.bytes) }} title={`${s.label} : ${fmtBytes(s.bytes)}`} />
-        ))}
-      </div>
-      <div className="legend">
-        {segs.map((s) => (
-          <span key={s.key}>
-            <i className={`dot seg-${s.key}`} /> {s.label} <strong>{fmtBytes(s.bytes)}</strong>
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function SessionsChart({
-  rows,
-  current,
-  maxNative,
-  maxExt,
-  onPick,
-}: {
-  rows: { t: number; e: ReturnType<typeof estimate> }[];
-  current: number;
-  maxNative: number;
-  maxExt: number;
-  onPick: (i: number) => void;
-}) {
-  const max = Math.max(1, ...rows.map((r) => r.e.sessions));
-  // Échelle logarithmique : les sessions varient d'un facteur ~100 entre 8k et 1M.
-  const w = (n: number) => (n <= 0 ? 0 : (Math.log10(n + 1) / Math.log10(max + 1)) * 100);
-  return (
-    <div className="sessions">
-      {rows.map((r, i) => (
-        <button
-          key={r.t}
-          type="button"
-          className={`srow${r.t === current ? " current" : ""}${r.t > maxExt ? " over" : r.t > maxNative ? " ext" : ""}`}
-          onClick={() => onPick(i)}
-        >
-          <span className="slabel">{contextLabel(r.t)}</span>
-          <span className="sbar">
-            <span style={{ width: `${w(r.e.sessions)}%` }} />
-          </span>
-          <span className="sval">{fmtInt(r.e.sessions)}</span>
-          <span className="skv muted">{fmtBytes(r.e.kv.perRequestBytes)}/req.</span>
-        </button>
-      ))}
-      <p className="hint">Échelle logarithmique. Cliquez une ligne pour choisir ce contexte.</p>
     </div>
   );
 }

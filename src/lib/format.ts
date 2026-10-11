@@ -24,3 +24,16 @@ export function fmtTokens(n: number): string {
   if (n >= 1e3) return `${nf0.format(n / 1e3)} k`;
   return nf0.format(n);
 }
+
+export function fmtRate(tokPerSec: number): string {
+  if (tokPerSec >= 1e5) return `${nf0.format(tokPerSec / 1e3)} k tok/s`;
+  if (tokPerSec >= 100) return `${nf0.format(tokPerSec)} tok/s`;
+  return `${nf1.format(tokPerSec)} tok/s`;
+}
+
+export function fmtDuration(seconds: number): string {
+  if (seconds < 1) return `${nf0.format(seconds * 1000)} ms`;
+  if (seconds < 120) return `${nf1.format(seconds)} s`;
+  if (seconds < 7200) return `${nf1.format(seconds / 60)} min`;
+  return `${nf1.format(seconds / 3600)} h`;
+}
