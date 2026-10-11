@@ -1,5 +1,5 @@
-// Valide le fichier de configuration sans lancer l'application.
-// Usage : pnpm run check-config [chemin/vers/fichier.yaml]
+// Validate the configuration file without starting the application.
+// Usage: pnpm run check-config [path/to/file.yaml]
 import { configPath, parseConfigFile } from "../src/lib/load-config";
 
 const file = process.argv[2] ?? configPath();

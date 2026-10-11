@@ -8,7 +8,7 @@ import { estimatePerf } from "@/lib/perf";
 
 export function PerfPanel({ input, est, perf }: { input: EstimateInput; est: Estimate; perf: PerformanceSettings }) {
   const p = useMemo(() => estimatePerf(input, est, perf), [input, est, perf]);
-  // Courbe débit / concurrence : puissances de 4 jusqu'au maximum de sessions.
+  // Throughput/concurrency curve: powers of 4 up to the maximum session count.
   const batches = useMemo(() => {
     const out: number[] = [];
     for (let b = 1; b < est.sessions; b *= 4) out.push(b);

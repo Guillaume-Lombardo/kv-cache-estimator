@@ -1,6 +1,6 @@
 /**
- * Conversion d'un config.json Hugging Face (ou params.json Mistral) en entrée `models:` du YAML.
- * Utilisé par le script `pnpm run import-model` et par le panneau d'import de l'interface.
+ * Convert a Hugging Face config.json (or Mistral params.json) into a YAML `models:` entry.
+ * Used by `pnpm run import-model` and the UI import panel.
  */
 import { Document, isMap, isSeq } from "yaml";
 import type { LayerGroup, ModelInput } from "./config-schema";
@@ -11,10 +11,10 @@ export interface ImportOptions {
   id?: string;
   name?: string;
   family?: string;
-  /** Dépôt Hugging Face (org/nom). */
+  /** Hugging Face repository (org/name). */
   source?: string;
   revision?: string;
-  /** Paramètres totaux, en milliards (prioritaire sur les métadonnées et l'estimation). */
+  /** Total parameters, in billions (overrides metadata and estimates). */
   paramsB?: number;
   activeParamsB?: number;
 }
@@ -22,7 +22,7 @@ export interface ImportOptions {
 export interface ImportResult {
   model: ModelInput;
   warnings: string[];
-  /** Origine du nombre de paramètres. */
+  /** Source of the parameter count. */
   paramsSource: "option" | "métadonnées safetensors" | "nom du dépôt" | "estimation";
 }
 
@@ -44,7 +44,7 @@ const num = (v: unknown): number | undefined => (typeof v === "number" && Number
 const obj = (v: unknown): Json | undefined => (v && typeof v === "object" && !Array.isArray(v) ? (v as Json) : undefined);
 const round = (x: number, d = 2) => Math.round(x * 10 ** d) / 10 ** d;
 
-/** Normalise un params.json Mistral (dim, n_layers…) vers les clés Hugging Face. */
+/** Normalize Mistral params.json keys (dim, n_layers, etc.) to Hugging Face keys. */
 function fromMistralParams(p: Json): Json {
   const moe = obj(p.moe);
   return {
@@ -107,12 +107,12 @@ function detectNativeFormat(q: Json | undefined, dtype: unknown): { format: stri
 interface ParamEstimate {
   total: number;
   active: number;
-  /** Experts routés (répartis en expert parallel). */
+  /** Routed experts (sharded through expert parallelism). */
   routed: number;
   embeddings: number;
 }
 
-/** Estimation des paramètres à partir des dimensions (attention + MLP/MoE + couches linéaires). */
+/** Estimate parameters from dimensions (attention + MLP/MoE + linear layers). */
 function estimateParams(t: Json, groups: LayerGroup[], tied: boolean, linearParamsPerLayer: number): ParamEstimate {
   const H = num(t.hidden_size) ?? 0;
   const vocab = num(t.vocab_size) ?? 0;
@@ -148,11 +148,11 @@ function estimateParams(t: Json, groups: LayerGroup[], tied: boolean, linearPara
   let denseLayers = experts ? (num(t.first_k_dense_replace) ?? 0) : L;
   let moeLayers = experts ? L - denseLayers : 0;
   if (pattern) {
-    // Nemotron-H : E = MoE, - = MLP dense, M/* = mixeurs sans MLP.
+    // Nemotron-H: E = MoE, - = dense MLP, M/* = mixers without MLP.
     moeLayers = experts ? [...pattern].filter((c) => c === "E").length : 0;
     denseLayers = [...pattern].filter((c) => c === "-").length;
   }
-  const mlpMul = t.mlp_hidden_act === "relu2" ? 2 : 3; // relu² : pas de gate
+  const mlpMul = t.mlp_hidden_act === "relu2" ? 2 : 3; // relu squared: no gate
   const dense = denseLayers * mlpMul * H * inter;
   const perExpert = mlpMul * expertHidden * moeInter;
   const routed = moeLayers * experts * perExpert;
@@ -175,7 +175,7 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
   const root = obj(input);
   if (!root) throw new Error("Le fichier doit contenir un objet JSON.");
 
-  // Enveloppe { repo, revision, config, parameterMetadata } (copies de config/upstream/).
+  // Envelope { repo, revision, config, parameterMetadata } (config/upstream/ snapshots).
   const wrapped = obj(root.config) && (root.repo !== undefined || root.parameterMetadata !== undefined);
   let cfg: Json = wrapped ? (obj(root.config) as Json) : root;
   const meta = wrapped ? obj(root.parameterMetadata) : undefined;
@@ -213,11 +213,11 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
   const layerTypes = Array.isArray(t.layer_types) ? (t.layer_types as string[]) : undefined;
   const countType = (re: RegExp) => layerTypes?.filter((x) => re.test(x)).length ?? 0;
 
-  // --- Couches linéaires
+  // --- Linear layers
   let linearCount = 0;
   let linearParamsPerLayer = 0;
   if (typeof t.hybrid_override_pattern === "string") {
-    // Nemotron-H : M = Mamba-2, * = attention, E/- = MLP / MoE.
+    // Nemotron-H: M = Mamba-2, * = attention, E/- = MLP / MoE.
     const p = t.hybrid_override_pattern;
     linearCount = [...p].filter((c) => c === "M").length;
     const mh = num(t.mamba_num_heads) ?? 0;
@@ -237,7 +237,7 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
     const d = num(linCfg.head_dim) ?? 128;
     const k = num(linCfg.short_conv_kernel_size) ?? 4;
     groups.push({ kind: "linear", count: linearCount, ssmElements: h * d * d, convElements: (k - 1) * 3 * h * d, label: "KDA (état constant)" });
-    linearParamsPerLayer = 6 * H * h * d; // q, k, v, o + portes
+    linearParamsPerLayer = 6 * H * h * d; // q, k, v, o + gates
     if (ssmDtype !== "float32") {
       ssmStateBytes = 4;
       warnings.push("États KDA supposés en FP32 (hypothèse prudente).");
@@ -254,16 +254,16 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
     linearParamsPerLayer = H * (2 * kh * kd + 2 * vh * vd + 2 * vh) + vh * vd * H;
   }
 
-  // --- Couches d'attention
+  // --- Attention layers
   if (typeof t.hybrid_override_pattern === "string") {
-    // déjà traité
+    // Already handled
   } else if (num(t.kv_lora_rank)) {
     const attnCount = linCfg && Array.isArray(linCfg.full_attn_layers) ? (linCfg.full_attn_layers as unknown[]).length : L - linearCount;
     const rope = t.mla_use_nope === true ? 0 : (num(t.qk_rope_head_dim) ?? 64);
     const rank = num(t.kv_lora_rank) as number;
     const idxDim = num(t.index_head_dim);
     if (idxDim) {
-      let extra = idxDim + 4; // clés FP8 + échelle FP32
+      let extra = idxDim + 4; // FP8 keys + FP32 scale
       if (t.index_kpool_compress === true && num(t.index_kpool)) extra = Math.round(extra / (num(t.index_kpool) as number));
       const types = Array.isArray(t.indexer_types) ? (t.indexer_types as string[]) : undefined;
       const fullIdx = Math.min(attnCount, types ? types.filter((x) => x === "full").length : attnCount);
@@ -273,7 +273,7 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
       groups.push({ kind: "mla", count: attnCount, kvLoraRank: rank, ropeHeadDim: rope });
     }
   } else if (Array.isArray(t.block_configs)) {
-    // Modèles élagués par NAS (DeciLM / Nemotron Super).
+    // NAS-pruned models (DeciLM / Nemotron Super).
     const blocks = t.block_configs as Json[];
     const byKv = new Map<number, number>();
     for (const b of blocks) {
@@ -284,7 +284,7 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
     }
     for (const [kv, count] of byKv) groups.push(gqa(count, kv, headDim));
   } else if (obj(t.hybrid_layer_pattern) || Array.isArray(t.hybrid_layer_pattern)) {
-    // MiMo-V2 : 0 = attention globale, 1 = fenêtre glissante.
+    // MiMo-V2: 0 = global attention, 1 = sliding window.
     const p = t.hybrid_layer_pattern;
     const values = Array.isArray(p) ? (p as number[]) : Object.entries(p as Json).flatMap(([k, v]) => Array(num(v) ?? 0).fill(Number(k)));
     const full = values.filter((x) => x === 0).length;
@@ -292,7 +292,7 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
     if (slide) groups.push(swa(slide, num(t.swa_num_key_value_heads) ?? kvHeads, num(t.swa_head_dim) ?? headDim, window ?? 4096, num(t.swa_v_head_dim) ?? vDim));
     if (full) groups.push(gqa(full, kvHeads, headDim, vDim));
   } else if (countType(/sliding/) > 0) {
-    // Gemma 3/4, gpt-oss : layer_types explicite.
+    // Gemma 3/4, gpt-oss: explicit layer_types.
     const slide = countType(/sliding/);
     const full = countType(/full/);
     groups.push(swa(slide, kvHeads, headDim, window ?? 4096, vDim));
@@ -302,7 +302,7 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
     const full = Math.floor(L / every);
     groups.push(swa(L - full, kvHeads, headDim, window, vDim), gqa(full, kvHeads, headDim, vDim));
   } else if (num(t.attention_chunk_size) && (t.model_type === "llama4_text" || t.model_type === "llama4" || t.no_rope_layers !== undefined)) {
-    // Llama 4 : attention par chunks 3 couches sur 4.
+    // Llama 4: chunked attention in 3 out of 4 layers.
     const interval = num(t.nope_layer_interval) ?? 4;
     const full = Math.floor(L / interval);
     groups.push(swa(L - full, kvHeads, headDim, num(t.attention_chunk_size) as number, vDim), gqa(full, kvHeads, headDim, vDim));
@@ -314,7 +314,7 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
   }
   if (!groups.length) throw new Error("Aucune couche à cache détectée.");
 
-  // --- Paramètres
+  // --- Parameters
   const est = estimateParams(t, groups, tied, linearParamsPerLayer);
   let paramsSource: ImportResult["paramsSource"] = "estimation";
   let paramsB = est.total / 1e9;
@@ -328,7 +328,7 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
     paramsB = (num(meta.total) as number) / 1e9;
     paramsSource = "métadonnées safetensors";
   } else if (nominal && (packed || Math.abs(nominal - paramsB) / nominal > 0.35)) {
-    // Estimation non fiable (tenseurs empaquetés ou architecture mal reconnue) : on garde la valeur nominale.
+    // Unreliable estimate (packed tensors or unrecognized architecture): keep the nominal value.
     paramsB = nominal;
     paramsSource = "nom du dépôt";
     warnings.push(`Nombre de paramètres nominal pris dans le nom du dépôt (${nominal} B) ; l'estimation par dimensions donne ${round(est.total / 1e9, 1)} B.`);
@@ -342,7 +342,7 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
   if (Math.abs(ratio - 1) > 0.15 && paramsSource !== "estimation")
     warnings.push(`L'estimation par dimensions (${round(est.total / 1e9, 1)} B) s'écarte de ${Math.round((ratio - 1) * 100)} % du nombre retenu : architecture partiellement reconnue.`);
 
-  // --- Format natif
+  // --- Native format
   const q = obj(t.quantization_config) ?? obj(cfg.quantization_config);
   const nativeFmt = detectNativeFormat(q, t.torch_dtype ?? t.dtype ?? cfg.torch_dtype ?? cfg.dtype);
   let extraUnq = 0;
@@ -351,7 +351,7 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
     extraUnq = Math.max(0, bf16 - est.embeddings / 1e9);
   }
 
-  // --- Contexte
+  // --- Context
   const maxPos = num(t.max_position_embeddings) ?? num(t.max_seq_len) ?? 32768;
   const rope = obj(t.rope_scaling) ?? obj(t.rope_parameters);
   if (!rope?.factor && maxPos <= 65536) warnings.push("Pas d'extension RoPE déclarée : renseignez maxContextExtended si le modèle supporte YaRN.");
@@ -394,7 +394,7 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
   return { model, warnings, paramsSource };
 }
 
-/** Sérialise une entrée de modèle pour la coller sous `models:` (couches en style compact). */
+/** Serialize a model entry for insertion under `models:` (compact layer formatting). */
 export function modelToYaml(model: ModelInput): string {
   const doc = new Document([model]);
   const seq = doc.contents;

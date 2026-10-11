@@ -2,7 +2,7 @@ import { Estimator } from "@/components/Estimator";
 import { loadConfig } from "@/lib/load-config";
 import type { QueryParams } from "@/lib/scenario";
 
-// Le fichier de configuration est lu côté serveur, au démarrage (voir load-config.ts).
+// Read the configuration on the server at startup (see load-config.ts).
 export const dynamic = "force-dynamic";
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;

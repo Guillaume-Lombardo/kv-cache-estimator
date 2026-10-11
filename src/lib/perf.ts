@@ -2,9 +2,9 @@ import { isMoE, storedTokens, weightSupport, type Estimate, type EstimateInput }
 import type { GpuSpec, PerformanceSettings, WeightFormat } from "./config-schema";
 
 /**
- * Estimation de débit en décodage, au premier ordre :
- * temps d'une étape = max(octets lus / bande passante, FLOPs / débit de calcul) + latence des collectives.
- * Les octets lus sont les poids touchés (experts activés pour un MoE) et le KV des requêtes du batch.
+ * First-order decoding throughput estimate:
+ * step time = max(bytes read / bandwidth, FLOPs / compute throughput) + collective latency.
+ * Bytes read include accessed weights (active experts for MoE) and the batch's KV cache.
  */
 
 export interface DecodePoint {
@@ -16,18 +16,18 @@ export interface DecodePoint {
 }
 
 export interface PerfEstimate {
-  /** Une seule session active. */
+  /** One active session. */
   single: DecodePoint;
-  /** Toutes les sessions possibles actives. */
+  /** All available sessions active. */
   full: DecodePoint | null;
-  /** Prefill d'un contexte complet pour une requête seule, en secondes. */
+  /** Full-context prefill for one request, in seconds. */
   prefillSeconds: number;
   computeLabel: string;
-  /** Point de fonctionnement pour un nombre quelconque de sessions actives. */
+  /** Operating point for an arbitrary number of active sessions. */
   at: (batch: number) => DecodePoint;
 }
 
-/** Débit tensor core utilisé selon le format des poids (FP4 émulé → BF16). */
+/** Tensor-core throughput for the weight format (emulated FP4 uses BF16). */
 export function computeTflops(gpu: GpuSpec, wf: WeightFormat, emulated: boolean): { tflops: number; label: string } {
   const t = gpu.tflops;
   if (!emulated && wf.compute === "fp4" && t.fp4) return { tflops: t.fp4, label: "FP4" };
@@ -35,7 +35,7 @@ export function computeTflops(gpu: GpuSpec, wf: WeightFormat, emulated: boolean)
   return { tflops: t.bf16, label: gpu.id === "v100" ? "FP16" : "BF16" };
 }
 
-/** FLOPs de décodage par token : 2 × paramètres actifs + attention sur le contexte retenu. */
+/** Decoding FLOPs per token: 2 x active parameters plus attention over the retained context. */
 function decodeFlopsPerToken(input: EstimateInput): number {
   const { model: m, contextTokens: ctx, engine } = input;
   const active = (m.activeParamsB ?? m.paramsB) * 1e9;
@@ -44,7 +44,7 @@ function decodeFlopsPerToken(input: EstimateInput): number {
     if (g.kind === "full" || g.kind === "sliding") {
       attn += 2 * g.count * m.attentionHeads * (g.headDim + (g.headDimV ?? g.headDim)) * storedTokens(g, ctx, engine);
     } else if (g.kind === "mla") {
-      // MLA absorbé : scores et sorties dans l'espace latent.
+      // Absorbed MLA: scores and outputs in latent space.
       attn += 2 * g.count * m.attentionHeads * (2 * g.kvLoraRank + g.ropeHeadDim) * ctx;
     } else {
       attn += 4 * g.count * g.ssmElements;
@@ -53,7 +53,7 @@ function decodeFlopsPerToken(input: EstimateInput): number {
   return 2 * active + attn;
 }
 
-/** FLOPs du prefill d'une requête de ctx tokens (attention causale). */
+/** Prefill FLOPs for a request of ctx tokens (causal attention). */
 function prefillFlops(input: EstimateInput): number {
   const { model: m, contextTokens: ctx, engine } = input;
   const active = (m.activeParamsB ?? m.paramsB) * 1e9;
@@ -64,7 +64,7 @@ function prefillFlops(input: EstimateInput): number {
       const pairs = kept < ctx ? ctx * kept : (ctx * ctx) / 2;
       attn += 2 * g.count * m.attentionHeads * (g.headDim + (g.headDimV ?? g.headDim)) * pairs;
     } else if (g.kind === "mla") {
-      // Prefill non absorbé : têtes K (nope + rope) et V, ~256 + rope.
+      // Unabsorbed prefill: K (nope + rope) and V heads, approximately 256 + rope.
       attn += 2 * g.count * m.attentionHeads * (256 + g.ropeHeadDim) * ((ctx * ctx) / 2);
     } else {
       attn += 4 * g.count * g.ssmElements * ctx;
@@ -89,7 +89,7 @@ export function estimatePerf(input: EstimateInput, est: Estimate, perf: Performa
   const W = est.weights.totalBytes;
   const moe = isMoE(m);
   const a = moe ? (m.activeParamsB as number) / m.paramsB : 1;
-  /** Poids lus pour un batch de b séquences : les experts touchés croissent avec le batch. */
+  /** Weights read for a batch of b sequences: accessed experts increase with batch size. */
   const weightsRead = (bytes: number, b: number) => (moe ? bytes * Math.min(1, Math.max(a, 1 - Math.pow(1 - a, b))) : bytes);
   const flopsTok = decodeFlopsPerToken(input);
   const layers = m.layers.reduce((s, g) => s + g.count, 0);
@@ -110,7 +110,7 @@ export function estimatePerf(input: EstimateInput, est: Estimate, perf: Performa
       memS = ((weightsRead(W, micro) / W) * est.weights.perGpuBytes + micro * est.kv.perRequestPerGpuBytes) / bytesPerSec;
       compS = (micro * flopsTok) / n / flopsPerSec;
       const comm = (2 * (layers / pp) * collectiveLatencyUs(gpu, tp, perf) + (pp > 1 ? collectiveLatencyUs(gpu, n, perf) : 0)) / 1e6;
-      // Chaque étape de décodage traverse les pp étages ; chaque étage traite pp micro-batchs.
+      // Each decoding step traverses pp stages; each stage handles pp microbatches.
       stepS = pp * (Math.max(memS, compS) + comm);
     }
     return {

@@ -4,7 +4,7 @@ const nf1 = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1, minimumFr
 const nf0 = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 0 });
 const nf2 = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 });
 
-/** Octets → "12,3 Gio" (ou Mio / Tio selon l'ordre de grandeur). */
+/** Bytes to "12,3 Gio" (or Mio / Tio depending on magnitude), using French UI formatting. */
 export function fmtBytes(bytes: number): string {
   if (bytes >= 1024 * GIB) return `${nf2.format(bytes / (1024 * GIB))} Tio`;
   if (bytes >= GIB || bytes === 0) return `${nf1.format(bytes / GIB)} Gio`;

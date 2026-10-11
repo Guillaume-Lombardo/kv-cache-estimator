@@ -227,7 +227,7 @@ export function SessionsChart({
   onPick: (t: number) => void;
 }) {
   const max = Math.max(1, ...rows.map((r) => r.e.sessions));
-  // Échelle logarithmique : les sessions varient d'un facteur ~100 entre 8k et 1M.
+  // Logarithmic scale: session counts vary by roughly 100x between 8k and 1M.
   const w = (n: number) => (n <= 0 ? 0 : (Math.log10(n + 1) / Math.log10(max + 1)) * 100);
   return (
     <div>

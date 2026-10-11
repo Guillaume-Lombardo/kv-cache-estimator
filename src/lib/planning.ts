@@ -15,7 +15,7 @@ import { estimatePerf } from "./perf";
 
 const usable = (l: string) => l !== "unsupported";
 
-/** Format de poids : courant si possible, sinon natif du modèle, sinon le plus proche disponible. */
+/** Weight format: current selection when possible, then the model's native format, then the closest available format. */
 export function pickWeightFormat(cfg: AppConfig, m: ModelSpec, g: GpuSpec, e: EngineSpec, current?: string): string {
   if (current && cfg.weightFormats.some((f) => f.id === current) && usable(weightSupport(g, e, current).level)) return current;
   const native = m.nativeWeightFormat;
@@ -32,7 +32,7 @@ export function pickKvFormat(cfg: AppConfig, g: GpuSpec, e: EngineSpec, current?
   return cfg.kvCacheFormats.find((f) => usable(kvSupport(g, e, f.id).level))?.id ?? cfg.kvCacheFormats[0].id;
 }
 
-/** Nombres de GPUs proposés : 1-8, puis les grandes tailles (72 réservé aux domaines NVL72). */
+/** Available GPU counts: 1-8, then larger sizes (72 is reserved for NVL72 domains). */
 export function gpuCountOptions(cfg: AppConfig, g: GpuSpec): number[] {
   const large = cfg.largeGpuCounts.filter((c) => c % 72 !== 0 || g.nvlinkDomain >= 72);
   return [1, 2, 3, 4, 5, 6, 7, 8, ...large];
@@ -44,15 +44,15 @@ export function divisors(n: number): number[] {
   return out;
 }
 
-/** TP maximal raisonnable : le domaine NVLink, sinon un serveur PCIe. */
+/** Practical TP limit: the NVLink domain, or a PCIe server otherwise. */
 export function maxTp(g: GpuSpec): number {
   return g.interconnect.nvlink ? Math.max(g.nvlinkDomain, 1) : g.maxGpusPerNode;
 }
 
-/** TP par défaut plafonné à 8 (pratique courante avec vLLM) ; au-delà, PP ou DP. */
+/** Default TP capped at 8 (common vLLM practice); use PP or DP beyond that. */
 const DEFAULT_TP_CAP = 8;
 
-/** Plus grand degré de TP valide qui divise n et reste dans le domaine d'interconnexion. */
+/** Largest valid TP degree that divides n and stays within the interconnect domain. */
 export function defaultTp(m: ModelSpec, g: GpuSpec, n: number): number {
   const candidates = divisors(n).filter((d) => d <= Math.min(maxTp(g), DEFAULT_TP_CAP) && isValidTp(m, d));
   return candidates.length ? candidates[candidates.length - 1] : 1;
@@ -71,10 +71,10 @@ export interface SizingRow {
 }
 
 /**
- * Dimensionnement inverse : pour chaque GPU, plus petit nombre de cartes qui atteint `targetSessions`
- * sans erreur bloquante, en testant TP×PP (TP valides) et DP-attention.
+ * Inverse sizing: for each GPU type, find the smallest count reaching `targetSessions`
+ * without blocking errors, testing TP x PP (valid TP degrees) and DP-attention.
  */
-/** Configuration recommandable : aucune erreur bloquante (formats, parallélisme, contexte, capacité). */
+/** Recommendable configuration: no blocking errors (formats, parallelism, context, capacity). */
 export function isValidConfig(cfg: AppConfig, input: EstimateInput): boolean {
   const est = estimate(input);
   return !collectIssues(input, est, cfg.weightFormats).some((i) => i.severity === "error");
@@ -103,19 +103,19 @@ export function sizeForTarget(
         .filter((d) => d <= maxTp(gpu) && isValidTp(base.model, d))
         .map((tp) => ({ mode: "tp-pp" as const, tp }));
       if (n > 1 && isMoE(base.model) && base.engine.features.dpAttention !== false) configs.push({ mode: "dp-ep", tp: 1 });
-      // Parmi les configurations qui atteignent l'objectif, on garde celle au meilleur débit agrégé
-      // (mesuré à l'objectif, pas à pleine charge).
+      // Among configurations reaching the target, keep the highest aggregate throughput
+      // (measured at the target concurrency, not at full capacity).
       let best: { input: EstimateInput; sessions: number; rate: number; score: number; unverified: boolean } | null = null;
       for (const c of configs) {
         const memoryWeightFormat = memoryFormatFor(cfg.weightFormats, gpu, base.engine, weightFormat);
-        // La mémoire visible personnalisée ne vaut que pour la carte sur laquelle elle a été saisie.
+        // The visible-memory override applies only to the GPU type for which it was entered.
         const memoryGiBOverride = gpu.id === baseGpuId ? base.memoryGiBOverride : undefined;
         const input: EstimateInput = { ...base, gpu, gpuCount: n, mode: c.mode, tp: c.tp, weightFormat, memoryWeightFormat, kvFormat, memoryGiBOverride };
         const est = estimate(input);
         if (est.sessions < targetSessions) continue;
         const issues = collectIssues(input, est, cfg.weightFormats);
         if (issues.some((i) => i.severity === "error")) continue;
-        // Une configuration qui repose sur une capacité non vérifiée passe après les configurations vérifiées.
+        // Rank configurations using unverified capabilities below verified configurations.
         const unverified = issues.some((i) => /(non vérifié|non vérifiée)/.test(i.title) && /(parallel|DP-attention)/i.test(i.title));
         const rate = estimatePerf(input, est, cfg.performance).at(targetSessions).tokPerSecTotal;
         const score = unverified ? rate / 1e6 : rate;
@@ -154,7 +154,7 @@ export function sizeForTarget(
   return rows.sort((a, b) => (a.gpuCount ?? 1e9) - (b.gpuCount ?? 1e9) || b.sessions - a.sessions);
 }
 
-/** Plus grand contexte (parmi les crans, dans la limite du modèle) qui permet `targetSessions` sessions sans erreur. */
+/** Largest context step within the model limit that supports `targetSessions` without errors. */
 export function maxContextFor(cfg: AppConfig, input: EstimateInput, targetSessions: number): number | null {
   let best: number | null = null;
   const limit = input.model.maxContextExtended ?? input.model.maxContext;

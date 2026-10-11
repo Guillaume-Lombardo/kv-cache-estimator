@@ -8,7 +8,7 @@ export type ConfigResult =
   | { ok: true; config: AppConfig; path: string }
   | { ok: false; error: string; path: string };
 
-/** Chemin du fichier : variable KV_ESTIMATOR_CONFIG, sinon config/estimator.yaml. */
+/** Configuration path: KV_ESTIMATOR_CONFIG, falling back to config/estimator.yaml. */
 export function configPath(): string {
   const p = process.env.KV_ESTIMATOR_CONFIG ?? "config/estimator.yaml";
   return path.isAbsolute(p) ? p : path.join(/*turbopackIgnore: true*/ process.cwd(), p);
@@ -30,8 +30,8 @@ export async function parseConfigFile(file: string): Promise<ConfigResult> {
 let cached: Promise<ConfigResult> | undefined;
 
 /**
- * Lu une seule fois au démarrage en production ; relu à chaque requête en dev
- * pour pouvoir éditer le fichier sans redémarrer.
+ * Read once at startup in production; read on every request in development
+ * so the file can be edited without restarting the server.
  */
 export function loadConfig(): Promise<ConfigResult> {
   if (process.env.NODE_ENV !== "production") return parseConfigFile(configPath());

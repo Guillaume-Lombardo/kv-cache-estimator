@@ -128,7 +128,7 @@ describe("estimate", async () => {
     const e = estimate(input(cfg, { gpu: "gh200", offloadGiBPerGpu: 400 }));
     expect(e.offload.parkedSessions).toBe(Math.floor((400 * GIB) / e.kv.perRequestClusterBytes));
     expect(e.offload.reloadMs).toBeCloseTo(((8 * GIB) / 450e9) * 1000, 3);
-    // Offload non vérifié dans ZML/LLMD : compté mais signalé.
+    // Unverified offload in ZML/LLMD: counted with a warning.
     const zi = input(cfg, { gpu: "gh200", offloadGiBPerGpu: 400, engine: "zml" });
     expect(collectIssues(zi, estimate(zi), cfg.weightFormats).some((i) => i.title.startsWith("Offload KV non vérifié"))).toBe(true);
   });
@@ -222,7 +222,7 @@ describe("review e00a496", async () => {
 
   it("P1 DP-attention : tensors non experts répliqués à leur précision réelle", () => {
     const e = estimate(input(cfg, { model: "kimi-k2.5", gpu: "b300", wf: "int4", gpuCount: 8, mode: "dp-ep" }));
-    // Attention seule en BF16 : 6,2 B × 2 o ≈ 11,55 Gio ; tout le non-expert dépasse cette valeur.
+    // Attention alone in BF16: 6.2 B x 2 bytes = about 11.55 GiB; total non-expert storage exceeds this.
     expect(e.weights.nonExpertBytes / GIB).toBeGreaterThan(11.55);
     expect(e.weights.perGpuBytes).toBeCloseTo(e.weights.nonExpertBytes + (e.weights.totalBytes - e.weights.nonExpertBytes) / 8, 0);
     const unknown = input(cfg, { model: "kimi-linear", gpuCount: 4, mode: "dp-ep" });
