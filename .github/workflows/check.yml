@@ -31,8 +31,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # playwright-core drives the runner's Google Chrome for the browser check.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - uses: docker/setup-buildx-action@v3
-      - name: Build the production image
+      - name: Build the production image served at the root
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -40,8 +47,22 @@ jobs:
           tags: kv-cache-estimator:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Test bundled and mounted configurations
+      - name: Build the production image served under /kv-estimator
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: kv-cache-estimator:test-prefixed
+          build-args: KV_ESTIMATOR_BASE_PATH=/kv-estimator
+          cache-from: type=gha
+      - name: Test the root image (bundled and mounted configurations)
+        env:
+          KV_SMOKE_BROWSER: require
         run: bash scripts/smoke-container.sh kv-cache-estimator:test
+      - name: Test the /kv-estimator image (bundled and mounted configurations)
+        env:
+          KV_SMOKE_BROWSER: require
+        run: bash scripts/smoke-container.sh kv-cache-estimator:test-prefixed /kv-estimator
 
   publish:
     if: github.event_name == 'release'
