@@ -14,7 +14,8 @@ base_path="${2:-}"
 engine="${CONTAINER_ENGINE:-docker}"
 browser_mode="${KV_SMOKE_BROWSER:-auto}"
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-test_dir="$(mktemp -d)"
+mkdir -p "$repo_dir/.tmp"
+test_dir="$(mktemp -d "$repo_dir/.tmp/smoke-container.XXXXXX")"
 container_id=''
 cleanup() {
   if [[ -n "$container_id" ]]; then
@@ -121,7 +122,10 @@ check_assets() {
     url="$(head -1 <<< "$urls")"
     [[ "$(curl -s -o /dev/null -w '%{http_code}' "$origin${url#"$base_path"}")" == 404 ]] \
       || fail "${url#"$base_path"} is served without the $base_path prefix."
-    if curl -s "$origin/" | grep -q 'aria-label="Résultats"'; then
+    headers="$(curl --silent --show-error --output "$test_dir/unprefixed.html" \
+      --write-out '%{http_code}' "$origin/")"
+    [[ "$headers" == 404 ]] || fail "the unprefixed root returned HTTP $headers, expected 404."
+    if grep -q 'aria-label="Résultats"' "$test_dir/unprefixed.html"; then
       fail "the estimator is also served at / although the image uses $base_path."
     fi
   fi
