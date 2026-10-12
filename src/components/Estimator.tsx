@@ -403,15 +403,7 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
   return (
     <div className="page">
       <header className="header">
-        <div>
-          <h1>{t("Estimateur KV cache", "KV cache estimator")}</h1>
-          <p className="subtitle">
-            {t(
-              "Mémoire des poids et du KV cache, sessions et débit pour les LLM open-weight sur GPU NVIDIA",
-              "Weight and KV cache memory, sessions and throughput for open-weight LLMs on NVIDIA GPUs",
-            )}
-          </p>
-        </div>
+        <h1>{t("Estimateur KV cache", "KV cache estimator")}</h1>
         <div className="header-side">
           <PrefsToggles />
           <p className="config-path" title={configPath}>
