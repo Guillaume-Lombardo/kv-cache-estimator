@@ -52,6 +52,9 @@ const round = (x: number, d = 2) => Math.round(x * 10 ** d) / 10 ** d;
 /** Normalize Mistral params.json keys (dim, n_layers, etc.) to Hugging Face keys. */
 function fromMistralParams(p: Json): Json {
   const moe = obj(p.moe);
+  const dsa = obj(p.dsa);
+  const kvSharing = obj(p.kv_sharing);
+  const quantization = obj(p.quantization);
   return {
     hidden_size: p.dim,
     num_hidden_layers: p.n_layers,
@@ -72,7 +75,10 @@ function fromMistralParams(p: Json): Json {
     n_shared_experts: moe?.num_shared_experts,
     moe_intermediate_size: moe?.expert_hidden_dim,
     first_k_dense_replace: moe?.first_k_dense_replace,
-    quantization_config: p.quantization_config,
+    index_head_dim: dsa?.head_dim,
+    indexer_types: typeof dsa?.sharing === "string" ? dsa.sharing.split(",") : undefined,
+    kv_source_layers: typeof kvSharing?.source_layers_str === "string" ? kvSharing.source_layers_str.split(",").map(Number) : undefined,
+    quantization_config: p.quantization_config ?? (String(quantization?.qformat_weight).toLowerCase().startsWith("fp8") ? { quant_method: "fp8" } : undefined),
     vision_config: p.vision_encoder,
   };
 }
@@ -83,6 +89,8 @@ function detectNativeFormat(q: Json | undefined, dtype: unknown): { format: stri
     const algo = String(q.quant_algo ?? "").toLowerCase();
     if (method === "mxfp4") return { format: "mxfp4" };
     if (algo.includes("nvfp4") || method === "nvfp4") return { format: "nvfp4" };
+    // ModelOpt mixed precision (e.g. NVFP4 experts, FP8 elsewhere): the experts dominate the weights.
+    if (algo === "mixed_precision" && JSON.stringify(q.quantized_layers ?? {}).includes("NVFP4")) return { format: "nvfp4" };
     if (method === "fp8" || q.fmt === "e4m3" || algo.includes("fp8")) return { format: "fp8" };
     if (method === "awq" || method === "gptq") {
       const bits = num(q.bits) ?? 4;
@@ -136,7 +144,8 @@ function estimateParams(t: Json, groups: LayerGroup[], tied: boolean, linearPara
       const v = num(t.v_head_dim) ?? 128;
       const qk = nope + g.ropeHeadDim;
       const q = qLora ? H * qLora + qLora * heads * qk : H * heads * qk;
-      attention += g.count * (q + H * (g.kvLoraRank + g.ropeHeadDim) + g.kvLoraRank * heads * (nope + v) + heads * v * H);
+      const kvA = g.kvShared ? 0 : H * (g.kvLoraRank + g.ropeHeadDim);
+      attention += g.count * (q + kvA + g.kvLoraRank * heads * (nope + v) + heads * v * H);
     } else {
       attention += g.count * linearParamsPerLayer;
     }
@@ -270,10 +279,24 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
     const rope = t.mla_use_nope === true ? 0 : (num(t.qk_rope_head_dim) ?? 64);
     const rank = num(t.kv_lora_rank) as number;
     const idxDim = num(t.index_head_dim);
-    if (idxDim) {
-      let extra = idxDim + 4; // FP8 keys + FP32 scale
-      if (t.index_kpool_compress === true && num(t.index_kpool)) extra = Math.round(extra / (num(t.index_kpool) as number));
-      const types = Array.isArray(t.indexer_types) ? (t.indexer_types as string[]) : undefined;
+    const types = Array.isArray(t.indexer_types) ? (t.indexer_types as string[]) : undefined;
+    const sources = Array.isArray(t.kv_source_layers) ? (t.kv_source_layers as number[]) : undefined;
+    let extra = idxDim ? idxDim + 4 : 0; // FP8 keys + FP32 scale
+    if (idxDim && t.index_kpool_compress === true && num(t.index_kpool)) extra = Math.round(extra / (num(t.index_kpool) as number));
+    if (sources && sources.length === attnCount && sources.some((s, i) => s !== i)) {
+      // Cross-layer KV sharing (Mistral Large 4): a layer reading an earlier layer's latent
+      // stores only its own indexer keys. Group layers by (shared latent, own indexer).
+      const buckets = new Map<string, LayerGroup & { kind: "mla" }>();
+      sources.forEach((s, i) => {
+        const kvShared = s !== i;
+        const indexed = extra > 0 && (!types || types[i] === "full");
+        const key = `${kvShared}/${indexed}`;
+        const g = buckets.get(key);
+        if (g) g.count++;
+        else buckets.set(key, { kind: "mla", count: 1, kvLoraRank: rank, ropeHeadDim: rope, ...(indexed ? { extraBytesPerToken: extra } : {}), ...(kvShared ? { kvShared: true } : {}) });
+      });
+      groups.push(...buckets.values());
+    } else if (idxDim) {
       const fullIdx = Math.min(attnCount, types ? types.filter((x) => x === "full").length : attnCount);
       groups.push({ kind: "mla", count: fullIdx, kvLoraRank: rank, ropeHeadDim: rope, extraBytesPerToken: extra });
       if (attnCount - fullIdx > 0) groups.push({ kind: "mla", count: attnCount - fullIdx, kvLoraRank: rank, ropeHeadDim: rope });
