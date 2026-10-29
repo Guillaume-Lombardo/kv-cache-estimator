@@ -423,6 +423,38 @@ gpus:
 # -----------------------------------------------------------------------------
 models:
   # ================================================================ Mistral AI
+  - id: mistral-large-4
+    name: Mistral Large 4 (1T-A52B)
+    family: Mistral AI
+    source: mistralai/Mistral-Large-4-1T-A52B
+    revision: f12dabdc0c1e99e7f7924461a6f308859b05af4d
+    paramsB: 1053.2
+    activeParamsB: 52
+    expertParamsB: 1029.2
+    hiddenSize: 6144
+    vocabSize: 204800
+    extraUnquantizedParamsB: 4.68
+    attentionHeads: 64
+    layers:
+      # DeepSeek Sparse Attention: FP8 indexer (128 dimensions + FP32 scale) on the 44 "full" indexer layers;
+      # the other 28 reuse the previous index (IndexShare). Cross-layer KV sharing: layers 39, 43, ..., 71
+      # read layer 35's latent and store only their own indexer keys.
+      - { kind: mla, count: 35, kvLoraRank: 512, ropeHeadDim: 64, extraBytesPerToken: 132 }
+      - { kind: mla, count: 28, kvLoraRank: 512, ropeHeadDim: 64 }
+      - { kind: mla, count: 9, kvLoraRank: 512, ropeHeadDim: 64, extraBytesPerToken: 132, kvShared: true }
+    maxContext: 1048576
+    nativeWeightFormat: fp8
+    officialWeightFormats: [fp8, nvfp4]
+    checkpoints: { nvfp4: mistralai/Mistral-Large-4-1T-A52B-NVFP4 }
+    weightFormatNotes:
+      nvfp4: { level: info, note: { fr: "Checkpoint officiel : experts en NVFP4, attention et expert partagé en FP8 (~610 Go). L'estimation applique NVFP4 à tous les poids quantifiés.", en: "Official checkpoint: NVFP4 experts, FP8 attention and shared expert (~610 GB). The estimate applies NVFP4 to every quantized weight." } }
+    tags: [moe, vision]
+    notes:
+      - { fr: "MLA + DeepSeek Sparse Attention avec partage du KV entre couches : 63 couches stockent un latent, 9 réutilisent celui de la couche 35.", en: "MLA + DeepSeek Sparse Attention with cross-layer KV sharing: 63 layers store a latent, 9 reuse layer 35's." }
+      - { fr: "Paramètres incluant l'encodeur vision et la tête de brouillon DSpark (2,1 B en BF16), pas dans le KV.", en: "Parameters include the vision encoder and the DSpark draft head (2.1 B in BF16), not in the KV." }
+      - { fr: "Le checkpoint annonce 1M tokens ; la recette vLLM est validée jusqu'à 256k (--max-model-len 262144).", en: "The checkpoint advertises 1M tokens; the vLLM recipe is validated up to 256k (--max-model-len 262144)." }
+      - { fr: "Licence Mistral Ecosystem Open-Weight (MIT modifiée) : un service Model-as-a-Service requiert une licence commerciale.", en: "Mistral Ecosystem Open-Weight License (modified MIT): a Model-as-a-Service business requires a commercial license." }
+
   - id: mistral-large-3
     name: Mistral Large 3 (675B-A41B)
     family: Mistral AI

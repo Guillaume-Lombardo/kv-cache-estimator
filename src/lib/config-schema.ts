@@ -154,6 +154,8 @@ const layerGroupSchema = z.discriminatedUnion("kind", [
     kvLoraRank: z.number().int().positive(),
     ropeHeadDim: z.number().int().nonnegative(),
     extraBytesPerToken: z.number().nonnegative().optional(),
+    /** Cross-layer KV sharing: the layer reads an earlier layer's latent and stores only extraBytesPerToken. */
+    kvShared: z.boolean().optional(),
   }),
   z.strictObject({
     kind: z.literal("linear"),

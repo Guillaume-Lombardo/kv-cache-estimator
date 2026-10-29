@@ -225,7 +225,7 @@ pnpm run import-model config.json --source org/repo --params 235 --active 22 --i
 
 Without `--append`, the command prints YAML. With `--append`, it adds the entry to the catalogue and validates the result. The UI's model import tab also accepts pasted or uploaded JSON. Imported models can be tested and saved in the current browser.
 
-The converter recognizes GQA/MHA, sliding windows (`layer_types`, `hybrid_layer_pattern`, `sliding_window_pattern`), Llama 4 chunked attention, MLA and DSA indexers (including IndexShare and pooling), Mamba-2, Gated DeltaNet, KDA, NAS-pruned `block_configs`, and Mistral's `params.json` structure.
+The converter recognizes GQA/MHA, sliding windows (`layer_types`, `hybrid_layer_pattern`, `sliding_window_pattern`), Llama 4 chunked attention, MLA and DSA indexers (including IndexShare and pooling), cross-layer KV sharing (`kv_source_layers`), Mamba-2, Gated DeltaNet, KDA, NAS-pruned `block_configs`, and Mistral's `params.json` structure.
 
 Parameter counts use this priority:
 
@@ -234,7 +234,7 @@ Parameter counts use this priority:
 3. An estimate from architecture dimensions: attention, MLPs, experts and linear layers.
 4. The repository name when a dimension-based estimate is unreliable, for example with packed tensors.
 
-Active MoE parameters are estimates. The native format comes from `quantization_config`; SSM state uses FP32 when the configuration requires it (`mamba_ssm_cache_dtype`). The 24 upstream snapshots include source revisions. Tests check that the converter reproduces the catalogue's layer definitions for each snapshot.
+Active MoE parameters are estimates. The native format comes from `quantization_config`; SSM state uses FP32 when the configuration requires it (`mamba_ssm_cache_dtype`). The 25 upstream snapshots include source revisions. Tests check that the converter reproduces the catalogue's layer definitions for each snapshot.
 
 ## Inputs
 
@@ -293,7 +293,7 @@ Pool preallocation, PP, DP-attention and offload remain unverified in this profi
 - Weights use parameter counts and effective bits, including quantization scales (for example INT4 g128 = 4.25 bits and NVFP4 = 4.5 bits). Embeddings, lm_head and designated unquantized parameters stay at 16 bits. `nativeBitsPerParam` handles specific native checkpoints, such as Kimi K2.5 INT4 g32 at 4.5 bits.
 - GQA/MHA KV = layers x KV heads x (K dimension + V dimension) x bytes x tokens.
 - Sliding-window KV is capped only when the engine both applies the window and frees expired blocks.
-- MLA KV = layers x (latent rank + RoPE dimension) x bytes x tokens, plus DSA indexer storage and scales where applicable.
+- MLA KV = layers x (latent rank + RoPE dimension) x bytes x tokens, plus DSA indexer storage and scales where applicable. Layers that read an earlier layer's latent (cross-layer KV sharing, `kvShared`) store only their indexer keys.
 - Linear/SSM cache is recurrent state plus convolution state, constant per request. `ssmStateBytes` can require FP32.
 - TP shards KV heads and replicates them when TP exceeds their count. Each TP rank stores a full MLA latent.
 - PP uses whole layers and sizes for the most heavily loaded stage: ceil(layers / PP), selecting the most expensive cache layers because exact ordering is unknown. Input/output embeddings are included; tied embeddings are copied at both ends. PP greater than the decoder layer count is invalid.
@@ -332,7 +332,7 @@ Example model entry to add under `models` in a complete catalogue:
   officialWeightFormats: [bf16, fp8, int4]
 ```
 
-Layer kinds are `full`, `sliding` (`window`), `mla` (`kvLoraRank`, `ropeHeadDim`, `extraBytesPerToken`) and `linear` (`ssmElements`, `convElements`).
+Layer kinds are `full`, `sliding` (`window`), `mla` (`kvLoraRank`, `ropeHeadDim`, `extraBytesPerToken`, `kvShared`) and `linear` (`ssmElements`, `convElements`).
 
 Text shown in the interface (descriptions, notes, support notes, labels, GPU names) accepts either one string for both languages or one string per language:
 
@@ -342,7 +342,7 @@ notes:
   - { fr: "Licence Mistral Research (usage commercial soumis à accord).", en: "Mistral Research License (commercial use requires an agreement)." }
 ```
 
-The catalogue contains 64 models across Mistral, Z.ai (GLM), Moonshot (Kimi), Xiaomi (MiMo), Qwen, NVIDIA, Google (Gemma), DeepSeek, OpenAI (gpt-oss) and Meta (Llama). Entries with a verified configuration revision have upstream snapshots in `config/upstream/`, originally collected on `feat/kv-cache-estimator`. Other entries use public architecture information with a `confidence` level (`high`, `medium`, `low`); the UI marks medium and low confidence. Some active parameter counts, including Kimi K3, GLM-5.3 and MiMo-V2.6-Pro, are estimates.
+The catalogue contains 65 models across Mistral, Z.ai (GLM), Moonshot (Kimi), Xiaomi (MiMo), Qwen, NVIDIA, Google (Gemma), DeepSeek, OpenAI (gpt-oss) and Meta (Llama). Entries with a verified configuration revision have upstream snapshots in `config/upstream/`, originally collected on `feat/kv-cache-estimator`. Other entries use public architecture information with a `confidence` level (`high`, `medium`, `low`); the UI marks medium and low confidence. Some active parameter counts, including Kimi K3, GLM-5.3 and MiMo-V2.6-Pro, are estimates.
 
 ## Development checks
 
@@ -353,6 +353,6 @@ pnpm test
 pnpm run build
 ```
 
-Tests cover formulas, TP/PP/DP replication, offload, throughput, sizing, the 24 upstream configuration imports and a configuration matrix. GitHub Actions also builds and smoke-tests the production image.
+Tests cover formulas, TP/PP/DP replication, offload, throughput, sizing, the 25 upstream configuration imports and a configuration matrix. GitHub Actions also builds and smoke-tests the production image.
 
 Keep source comments, docstrings and Markdown artifacts in English. Write every new UI string and catalogue message in both French and English: `t("…", "…")` from `usePrefs()` in components, `tr(lang)` in `src/lib`, `{ fr, en }` in the configuration. Do not edit upstream configuration snapshots to translate external source data.

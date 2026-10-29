@@ -84,6 +84,16 @@ describe("estimate", async () => {
     expect(dp.sessions).toBeGreaterThan(tp.sessions * 4);
   });
 
+  it.each([{ kf: "fp8", bytes: 1 }, { kf: "bf16", bytes: 2 }])("shared MLA latents keep independent indexer storage with $kf KV", ({ kf, bytes }) => {
+    const e = estimate(input(cfg, { model: "mistral-large-4", gpu: "b200", wf: "fp8", kf, gpuCount: 8 }));
+    expect(e.kv.perTokenBytes).toBe(63 * 576 * bytes + 44 * 132);
+    expect(e.kv.perRequestBytes).toBe(e.kv.perTokenBytes * 32768);
+    expect(e.kv.perRequestPerGpuBytes).toBe(e.kv.perRequestBytes);
+    expect(e.kv.perRequestClusterBytes).toBe(e.kv.perRequestBytes * 8);
+    expect(e.kv.groups[2].bytes).toBe(9 * 132 * 32768);
+    expect(e.kv.groups[2].detail).toContain("132");
+  });
+
   it("TP × PP : couches entières, rang le plus chargé (61 couches sur 2 étages → 31)", () => {
     const e = estimate(input(cfg, { model: "kimi-k2-instruct", gpu: "b200", wf: "fp8", gpuCount: 16, tp: 8 }));
     expect(e.pp).toBe(2);

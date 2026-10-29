@@ -208,7 +208,7 @@ function groupLabel(g: LayerGroup, t: ReturnType<typeof tr>): string {
     case "sliding":
       return t("Fenêtre glissante", "Sliding window");
     case "mla":
-      return t("MLA (latent compressé)", "MLA (compressed latent)");
+      return g.kvShared ? t("MLA (latent partagé)", "MLA (shared latent)") : t("MLA (latent compressé)", "MLA (compressed latent)");
     case "linear":
       return g.label ?? t("Linéaire / SSM (état constant)", "Linear / SSM (constant state)");
   }
@@ -313,10 +313,14 @@ export function estimate(input: EstimateInput): Estimate {
         break;
       }
       case "mla": {
-        const perTok = (g.kvLoraRank + g.ropeHeadDim) * kvB + (g.extraBytesPerToken ?? 0);
+        // A layer sharing an earlier layer's latent stores only its own indexer keys.
+        const perTok = (g.kvShared ? 0 : (g.kvLoraRank + g.ropeHeadDim) * kvB) + (g.extraBytesPerToken ?? 0);
         bytes = g.count * perTok * ctx;
         perTokenBytes += g.count * perTok;
-        detail = `latent ${g.kvLoraRank}${g.ropeHeadDim ? ` + RoPE ${g.ropeHeadDim}` : " (NoPE)"}${g.extraBytesPerToken ? t(` + ${g.extraBytesPerToken} o/tok (indexeur)`, ` + ${g.extraBytesPerToken} B/tok (indexer)`) : ""}`;
+        detail = g.kvShared
+          ? t("latent d'une couche précédente, non stocké", "earlier layer's latent, not stored")
+          : `latent ${g.kvLoraRank}${g.ropeHeadDim ? ` + RoPE ${g.ropeHeadDim}` : " (NoPE)"}`;
+        if (g.extraBytesPerToken) detail += t(` + ${g.extraBytesPerToken} o/tok (indexeur)`, ` + ${g.extraBytesPerToken} B/tok (indexer)`);
         break;
       }
       case "linear": {
