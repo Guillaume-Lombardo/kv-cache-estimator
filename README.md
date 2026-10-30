@@ -1,386 +1,130 @@
 # KV cache estimator
 
-A single-page Next.js / TypeScript application for estimating the memory required to serve open-weight LLMs on NVIDIA and AMD GPUs: model weights, KV cache per request, runtime overhead, concurrent sessions and approximate throughput. It also sizes deployments for a workload (request rate, prompt and output lengths, TTFT and ITL targets, cost), compares aggregated and prefill/decode-disaggregated serving, and supports inverse sizing and scenario comparison. The reference engine is vLLM, including deployments orchestrated by llm-d; SGLang and ZML / LLMD profiles are also included.
+**How much GPU memory, how many GPUs and what budget to serve an open-weight LLM.** Weights, KV cache, runtime overhead, throughput and latency-target sizing for vLLM / llm-d, SGLang and ZML / LLMD, on 23 NVIDIA and AMD GPUs and 91 models.
 
-The interface is available in French and English, with a light, dark or system theme. The buttons at the top right switch both; the choice is stored in cookies (`kv-lang`, `kv-theme`) so the server renders the right language and theme directly. Without a cookie, the language follows the browser's `Accept-Language` header (French by default). Repository documentation, Markdown files, source comments and docstrings are written in English.
+![Estimator overview: model and GPU choice, memory per GPU, sessions by context](docs/images/overview.png)
+
+French and English interface · light, dark or system theme · shareable URLs · JSON API and CLI · no GPU needed to run it.
+
+## What it answers
+
+| Question | Where |
+|---|---|
+| Does the model fit? How much KV cache per request, how many concurrent sessions? | Indicators, memory bar, **Detail** tab |
+| How fast? Tokens per second per session, in aggregate and per GPU; prefill time | **Throughput** tab |
+| How many GPUs for N requests per second within TTFT and ITL targets, at what cost? Aggregated or prefill/decode disaggregated (llm-d)? | **Load and SLOs** tab |
+| Fewest GPUs of each type for N sessions; longest context for N sessions | **Sizing** tab |
+| Which of several setups is best? | **Comparison** tab (up to six pinned scenarios) |
+| What about a model that is not in the list? | **Import a model** tab, by Hugging Face repository |
+
+| Load and SLOs | Unusual attention layouts (DeepSeek V4, 8 × B200, DP-attention) |
+|---|---|
+| ![Load and SLOs tab: concurrency, TTFT, ITL, aggregated and disaggregated plans, cards ranked by cost](docs/images/load-slos.png) | ![Results for DeepSeek V4 Flash: compressed attention layers, sessions by context, launch command](docs/images/results.png) |
 
 ## Quick start
 
-Requirements: Node.js 22.13 or newer and Corepack. `package.json` pins the pnpm version.
+Node.js 22.13 or newer with Corepack (`package.json` pins pnpm):
 
 ```bash
-corepack enable
-pnpm install --frozen-lockfile
-pnpm run dev                 # http://localhost:3000
-# Production
-pnpm run build && pnpm start
+corepack enable && pnpm install --frozen-lockfile
+pnpm run dev                          # http://localhost:3000
+pnpm run build && pnpm start          # production
 ```
 
-The server reads `config/estimator.yaml` at startup. In development, it reads the file again on each request. Use a YAML or JSON override without rebuilding the application:
+Or the image of the latest release (`linux/amd64` and `linux/arm64`; features merged since then arrive with the next release):
 
 ```bash
-KV_ESTIMATOR_CONFIG=/etc/kv/estimator.yaml pnpm start
-pnpm run check-config                         # Validate the default catalogue
-pnpm run check-config /etc/kv/estimator.yaml    # Validate another file
+docker run --rm -p 3000:3000 ghcr.io/guillaume-lombardo/kv-cache-estimator:latest
 ```
 
-Invalid configuration produces an error page. The schema is strict: unknown or misspelled keys are rejected.
+Mounting your own catalogue, serving under a URL prefix such as `/kv-estimator`, health checks, Traefik and releases are covered in [docs/deployment.md](docs/deployment.md).
 
-The same calculation is available as JSON, with the page's URL parameters (`model`, `gpu`, `n`, `tp`, `mode`, `eng`, `w`, `kv`, `ctx`, `r`, `in`, `out`, `rps`, `ttft`, `itl`, …) plus `lang=fr|en`:
+## API and CLI
+
+Every scenario is a URL. The same parameters return the full JSON report, with every issue carrying a stable `code`:
 
 ```bash
 curl 'http://localhost:3000/api/estimate?model=qwen3-32b&gpu=h100&n=2&ctx=65536&rps=4&lang=en'
-pnpm run estimate model=qwen3-32b gpu=h100 n=2 ctx=65536 rps=4   # same report, from the catalogue file
+pnpm run estimate model=qwen3-32b gpu=h100 n=2 ctx=65536 rps=4    # same report, offline
 ```
 
-Unknown identifiers return HTTP 400 (exit code 2 for the CLI). Each reported issue carries a stable `code` alongside its localized title.
+| Parameter | Meaning | Parameter | Meaning |
+|---|---|---|---|
+| `model`, `gpu`, `eng` | Catalogue identifiers | `in`, `out` | Average prompt and output tokens |
+| `n`, `tp`, `mode` | GPU count, TP degree (PP = n / TP), `tp-pp` or `dp-ep` | `rps` | Requests per second |
+| `w`, `kv` | Weight and KV cache formats | `ttft`, `itl` | Targets: seconds to first token, ms between tokens |
+| `ctx` | Context length in tokens | `usd` | Price per GPU-hour |
+| `r` | Reserve outside the engine, % | `mbt`, `ovh` | Tokens per scheduling step, measured overhead in GiB |
+| `mem`, `off` | Visible GiB per GPU, CPU offload GiB per GPU | `lang` | `fr` or `en` |
 
-To serve the application under a URL prefix instead of the root, set `KV_ESTIMATOR_BASE_PATH` for both the build and the server, for example `KV_ESTIMATOR_BASE_PATH=/kv-estimator pnpm run build && KV_ESTIMATOR_BASE_PATH=/kv-estimator pnpm start`, then open <http://localhost:3000/kv-estimator>. See [Serving under a URL prefix](#serving-under-a-url-prefix).
+Unknown identifiers return HTTP 400 (exit code 2 for the CLI).
 
-## Ready-to-run container
+## How it works
 
-Once a release has completed its publication workflow, its image is available at `ghcr.io/guillaume-lombardo/kv-cache-estimator`. Images include the default catalogue and support `linux/amd64` and `linux/arm64`. No GPU is required to run the estimator.
+Each GPU's memory is split the way the engine splits it. Sessions are whatever KV fits in the rest:
 
-```bash
-# latest follows the most recently published stable release.
-docker run --rm -p 3000:3000 \
-  ghcr.io/guillaume-lombardo/kv-cache-estimator:latest
+```mermaid
+flowchart LR
+  G["Visible GPU memory<br/>nvidia-smi / amd-smi"] --> R["Reserve<br/>outside the engine"]
+  G --> B["Engine budget<br/>--gpu-memory-utilization"]
+  B --> W["Weights<br/>params × bits ÷ TP, PP, EP"]
+  B --> O["Runtime overhead<br/>activation peak, logits,<br/>CUDA graphs"]
+  B --> K["KV pool"]
+  K --> S["Sessions =<br/>KV pool ÷ KV per request"]
 ```
 
-Open <http://localhost:3000>. For reproducible deployments, replace `latest` with a published release tag such as `v0.1.0`, or use the image digest recorded in the workflow summary. `v0.1.0` is an example, not a claim that this release already exists.
+vLLM pays the runtime overhead from its budget. SGLang's `--mem-fraction-static` covers weights and KV only, so the overhead must fit in the reserve.
 
-Mount a custom catalogue read-only:
+KV per request follows each model's attention layout:
 
-```bash
-docker run --rm -p 3000:3000 \
-  --mount "type=bind,src=$PWD/my-catalogue.yaml,dst=/config/estimator.yaml,readonly" \
-  -e KV_ESTIMATOR_CONFIG=/config/estimator.yaml \
-  ghcr.io/guillaume-lombardo/kv-cache-estimator:latest
-```
-
-The image runs as the non-root `node` user. Mounted files must be readable by that user. The default port is 3000; `PORT`, `HOSTNAME` and `KV_ESTIMATOR_CONFIG` can be overridden at runtime. `KV_ESTIMATOR_BASE_PATH` is a build argument; see [Serving under a URL prefix](#serving-under-a-url-prefix).
-
-To build and test an image locally:
-
-```bash
-docker build -t kv-cache-estimator:local .
-bash scripts/smoke-container.sh kv-cache-estimator:local
-```
-
-## Serving under a URL prefix
-
-By default the application is served at the root (`/`). To expose it under a prefix such as `/kv-estimator`, for example behind a reverse proxy that shares a host name with other services, build it with `KV_ESTIMATOR_BASE_PATH`. The value is passed to Next.js as [`basePath`](https://nextjs.org/docs/app/api-reference/config/next-config-js/basePath), so pages, `/_next/static` CSS and JavaScript, and redirects all carry the prefix.
-
-- The value must be empty (root, the default) or a path that starts with `/` and has no trailing slash, such as `/kv-estimator` or `/tools/kv-estimator`. Any other value, such as `/kv-estimator/`, `kv-estimator` or `/`, stops the build with an `Invalid KV_ESTIMATOR_BASE_PATH` error.
-- The prefix is compiled into the standalone server at build time. Setting `KV_ESTIMATOR_BASE_PATH` when starting a container has no effect: **changing the prefix requires rebuilding the image.** The published GHCR images are built for the root.
-- With a prefix, `/kv-estimator` serves the estimator, `/kv-estimator/` redirects to it (HTTP 308, relative `Location: /kv-estimator`), and `/` returns 404.
-
-### Build and run with Docker
-
-```bash
-# Root (default): http://localhost:3000/
-docker build -t kv-cache-estimator:root .
-docker run --rm -p 3000:3000 kv-cache-estimator:root
-
-# Under /kv-estimator: http://localhost:3000/kv-estimator
-docker build --build-arg KV_ESTIMATOR_BASE_PATH=/kv-estimator -t kv-cache-estimator:kv-estimator .
-docker run --rm -p 3000:3000 kv-cache-estimator:kv-estimator
-```
-
-### Build and run with Podman
-
-```bash
-# Root (default): http://localhost:3000/
-podman build -t kv-cache-estimator:root .
-podman run --rm -p 3000:3000 localhost/kv-cache-estimator:root
-
-# Under /kv-estimator: http://localhost:3000/kv-estimator
-podman build --build-arg KV_ESTIMATOR_BASE_PATH=/kv-estimator -t kv-cache-estimator:kv-estimator .
-podman run --rm -p 3000:3000 localhost/kv-cache-estimator:kv-estimator
-```
-
-A custom catalogue is mounted the same way in both modes (add `:Z` or `,relabel=private` to the mount on SELinux hosts with Podman):
-
-```bash
-docker run --rm -p 3000:3000 \
-  --mount "type=bind,src=$PWD/my-catalogue.yaml,dst=/config/estimator.yaml,readonly" \
-  -e KV_ESTIMATOR_CONFIG=/config/estimator.yaml \
-  kv-cache-estimator:kv-estimator
-```
-
-The images still run as the non-root `node` user. To check which prefix an image was built with:
-
-```bash
-docker run --rm kv-cache-estimator:kv-estimator \
-  node -p "require('/app/.next/required-server-files.json').config.basePath"
-# /kv-estimator   (empty output means the root)
-```
-
-### Health checks
-
-Under a prefix, the root no longer answers with HTTP 200, so point health checks at the prefixed path. Probe `/kv-estimator` without a trailing slash to get a direct 200 rather than a 308 redirect (or make sure the probe follows redirects). The image is based on Alpine and has no `curl`; use BusyBox `wget` or Node.js:
-
-```bash
-# Docker or Podman
-docker run -d -p 3000:3000 \
-  --health-cmd 'wget -q --spider http://127.0.0.1:3000/kv-estimator || exit 1' \
-  --health-interval 30s \
-  kv-cache-estimator:kv-estimator
-```
-
-```yaml
-# Docker Compose
-healthcheck:
-  test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/kv-estimator').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
-  interval: 30s
-  timeout: 5s
-  retries: 3
-
-# Kubernetes
-readinessProbe:
-  httpGet:
-    path: /kv-estimator
-    port: 3000
-```
-
-At the root, use `http://127.0.0.1:3000/` and `path: /` instead. `podman run` accepts the same `--health-cmd` and `--health-interval` options.
-
-### Traefik
-
-Route the prefix to the Next.js server **without stripping it**: the server expects to receive `/kv-estimator/...` paths. Do not attach a `StripPrefix` middleware to this router; with one, Next.js receives paths without the prefix and returns 404.
-
-Docker or Podman labels (Traefik Docker provider):
-
-```yaml
-services:
-  kv-estimator:
-    image: kv-cache-estimator:kv-estimator
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.kv-estimator.rule=PathPrefix(`/kv-estimator`)
-      - traefik.http.routers.kv-estimator.entrypoints=websecure
-      - traefik.http.services.kv-estimator.loadbalancer.server.port=3000
-      # No traefik.http.routers.kv-estimator.middlewares=...stripprefix...
-```
-
-File provider:
-
-```yaml
-http:
-  routers:
-    kv-estimator:
-      rule: PathPrefix(`/kv-estimator`)
-      entryPoints: [websecure]
-      service: kv-estimator
-      # No StripPrefix middleware.
-  services:
-    kv-estimator:
-      loadBalancer:
-        servers:
-          - url: http://kv-estimator:3000
-```
-
-``PathPrefix(`/kv-estimator`)`` matches both `/kv-estimator` and `/kv-estimator/...`. To exclude unrelated paths such as `/kv-estimator-old`, use ``Path(`/kv-estimator`) || PathPrefix(`/kv-estimator/`)`` instead. Add a host rule (``Host(`example.com`) && ...``) when Traefik serves several host names.
-
-After deploying, check that the page and its redirect stay under the prefix and that the assets load:
-
-```bash
-curl -sI https://example.com/kv-estimator/ | grep -i -E '^(HTTP|location)'   # 308, location: /kv-estimator
-curl -sL https://example.com/kv-estimator/ | grep -o '/kv-estimator/_next/static/[^"]*\.css' | head -1
-```
-
-The second command must print a stylesheet path under `/kv-estimator/_next/static/`; requesting it must return HTTP 200 with `Content-Type: text/css`.
-
-### Smoke tests
-
-`scripts/smoke-container.sh IMAGE [BASE_PATH]` tests an image built for the given prefix (empty for the root):
-
-```bash
-bash scripts/smoke-container.sh kv-cache-estimator:root
-bash scripts/smoke-container.sh kv-cache-estimator:kv-estimator /kv-estimator
-CONTAINER_ENGINE=podman bash scripts/smoke-container.sh localhost/kv-cache-estimator:kv-estimator /kv-estimator
-```
-
-For each mode it checks that the image was built with the expected prefix and runs as a non-root user, that the estimator is served in French and English (`Accept-Language` and the `kv-lang` cookie), that `BASE_PATH/` stays under the prefix after any redirect, and that every CSS and JavaScript URL in the HTML is under `BASE_PATH/_next/static/` and returns HTTP 200 with a CSS or JavaScript `Content-Type`. With a prefix, it also checks that neither the page nor the assets are served without it. It then restarts the image with a mounted catalogue and checks that the catalogue is used.
-
-When `playwright-core` is installed (`pnpm install`) and a Chromium or Google Chrome browser is available, `scripts/smoke-browser.mjs` also opens the page, checks that the stylesheet is applied, toggles the language to confirm that the JavaScript has hydrated, and reloads to confirm that the server renders the chosen language. Set `KV_SMOKE_BROWSER=require` to fail without a browser, `KV_SMOKE_BROWSER=skip` to skip the check, and `KV_SMOKE_BROWSER_PATH` to use a specific browser executable.
-
-## Releases and image publication
-
-The GitHub Actions workflow validates the catalogue, runs TypeScript checks and tests, builds the application, then builds and smoke-tests the production container twice: at the root and under `/kv-estimator`. The smoke tests check both the bundled catalogue and a mounted YAML override, the French and English pages, the CSS and JavaScript assets and their loading in a browser, and verify that the container runs without root privileges. Published images are built for the root.
-
-Publishing a GitHub Release triggers image publication after those checks pass:
-
-1. Merge the intended changes into `main`.
-2. Create a release with a tag such as `v0.1.0` or `v0.2.0-rc.1`, pointing to the intended commit. Use the GitHub prerelease flag for release candidates.
-3. Publish the release and wait for the `publish` job to succeed.
-4. Use the version tag or digest from the workflow summary.
-
-Stable releases publish their exact tag and `latest`. Prereleases publish only their exact tag and never replace `latest`. Draft releases and ordinary branch pushes do not publish images. Release tags are the image version authority; `package.json` is not used to generate image tags. Avoid republishing a version tag; use digests when immutability matters.
-
-The workflow authenticates to GHCR with `GITHUB_TOKEN` and grants `packages: write` only to the publication job. It attaches OCI metadata, build provenance and an SBOM. The runtime smoke test runs on amd64; the publication job builds both architectures.
-
-After the first publication, check the package's visibility in GitHub Packages. GHCR may create a private package initially. Set it to public for anonymous pulls, or authenticate Docker with an account that can read it. Repository or organization policies must allow Actions to publish packages.
-
-## Import a model
-
-Convert a Hugging Face `config.json` or Mistral `params.json` into a catalogue entry:
-
-```bash
-pnpm run import-model --hf Qwen/Qwen3-8B          # download config.json and the parameter count from the Hub
-pnpm run import-model path/config.json
-pnpm run import-model path/config.json --append
-pnpm run import-model config.json --source org/repo --params 235 --active 22 --id my-model
-```
-
-Without `--append`, the command prints YAML. With `--append`, it adds the entry to the catalogue and validates the result. The UI's model import tab fetches a repository by name through the server (`/api/hf-model?repo=org/name`, which only contacts `huggingface.co`) or accepts pasted or uploaded JSON. Imported models can be tested and saved in the current browser. Gated repositories need a token: set `HF_TOKEN` for the server or the CLI. Without network access, paste the file instead.
-
-The converter recognizes GQA/MHA, sliding windows (`layer_types`, `hybrid_layer_pattern`, `sliding_window_pattern`), Llama 4 chunked attention, MLA and DSA indexers (including IndexShare and pooling), cross-layer KV sharing (`kv_source_layers`), Mamba-2, Gated DeltaNet, KDA, NAS-pruned `block_configs`, and Mistral's `params.json` structure.
-
-It also recognizes DeepSeek V4 compressed attention (`compress_ratios`, including V4.1 shared compressed caches) and Nemotron-H `layers_block_type`.
-
-Parameter counts use this priority:
-
-1. The explicit `--params` option.
-2. Safetensors metadata from a `{repo, revision, config, parameterMetadata}` envelope, as stored in `config/upstream/`.
-3. An estimate from architecture dimensions: attention, MLPs, experts and linear layers.
-4. The repository name when a dimension-based estimate is unreliable, for example with packed tensors.
-
-Active MoE parameters are estimates. The native format comes from `quantization_config`; SSM state uses FP32 when the configuration requires it (`mamba_ssm_cache_dtype`). The 42 upstream snapshots include source revisions. Tests check that the converter reproduces the catalogue's layer definitions for each snapshot.
-
-## Inputs
-
-| Input | Control |
+| Layers | KV per token and layer |
 |---|---|
-| Model | Search by name, family or architecture keyword |
-| Context | Any length (`200k`, `1.5M`, `131072`), doubling presets from 8k to 1M, and the model's native and extended limits; extended and unsupported contexts are marked |
-| GPU | A family, then a variant. NVIDIA data center: V100, A100 (SXM 40 / 80 GB, PCIe 80 GB), H100 (SXM, NVL), H200 (SXM, NVL), GH200 (96 / 144 GB), B200 (HGX, GB200 NVL72), B300 (HGX, GB300 NVL72). AMD data center: MI300X, MI325X, MI355X. PCIe: L4, A10 / A10G, L40S, RTX PRO 6000, RTX 4090, RTX 5090 |
-| GPU count | 1 to 8, then 16, 32, 64; 72 for NVL72 domains |
-| Parallelism | TP/PP with selectable TP degree (PP = GPU count / TP), or DP-attention + EP for MoE |
-| Engine | vLLM / llm-d, SGLang or ZML / LLMD; both GPU and engine must support the format |
-| Formats | BF16, FP16, FP8, INT8, INT4, MXFP4, NVFP4 weights; BF16, FP16, FP8, NVFP4 KV |
-| Reserve | Percentage of each GPU left outside the engine: `1 − --gpu-memory-utilization` (vLLM) or `1 − --mem-fraction-static` (SGLang) |
-| Advanced | Visible memory per GPU from `nvidia-smi` / `amd-smi`, tokens per scheduling step, measured activation and runtime memory, KV offload to CPU RAM |
-| Workload | Average prompt and output tokens, request rate, TTFT and ITL targets, price per GPU-hour (Load and SLOs tab) |
+| GQA / MHA | KV heads × (K dim + V dim) × bytes |
+| Sliding window | Same, capped at the window when the engine frees expired blocks |
+| MLA (DeepSeek, Kimi, GLM) | (latent rank + RoPE dim) × bytes, plus sparse-indexer keys |
+| Compressed (DeepSeek V4) | One shared K = V entry per `compressRatio` tokens, plus a raw window |
+| Linear / SSM (Mamba, DeltaNet) | Constant state per request, whatever the context |
 
-The URL stores the scenario settings for sharing. Models imported only into browser storage must also be available in the receiving browser.
+Parallelism changes where it lands. TP shards KV heads and replicates them beyond their count, and replicates MLA latents. PP sizes the most loaded stage. DP-attention keeps each request on one GPU and shards only routed experts.
 
-## Results and limitations
+The workload model is first order. Each request holds its prompt plus half its output in KV on average. Prefills take a share of compute and slow decoding. Little's law gives the concurrency, then replicas share the traffic. Formulas, engine profiles and assumptions are in [docs/calculation.md](docs/calculation.md).
 
-The main indicators show model weights (total and per GPU), logical and replicated KV per request, model plus one KV cache, free KV memory in GiB, and concurrent sessions. Other panels provide:
+## Hardware, engines and models
 
-- Per-layer KV details, sessions at each context step and an indicative `vllm serve` command.
-- Estimated per-session and aggregate throughput, prefill time, memory/compute limits and CPU offload.
-- Load and SLOs: concurrency needed against capacity at the average request length, TTFT, ITL, replicas, aggregated versus prefill/decode-disaggregated serving with the KV traffic between pools, cost per hour and per million tokens, and the cheapest instance shape on every card.
-- Inverse sizing: minimum GPU count and parallelism for a target session count, plus the maximum context on the current configuration. Both sizing tables filter by card group.
-- Up to six pinned scenarios for comparison, and a JSON export.
+| Group | GPUs |
+|---|---|
+| NVIDIA data center | V100 · A100 (SXM 40/80 GB, PCIe 80 GB) · H100 (SXM, NVL) · H200 (SXM, NVL) · GH200 (96/144 GB) · B200 (HGX, GB200 NVL72) · B300 (HGX, GB300 NVL72) |
+| AMD data center | MI300X · MI325X · MI355X |
+| PCIe: inference and workstations | L4 · A10 / A10G · L40S · RTX PRO 6000 · RTX 4090 · RTX 5090 |
 
-Unsupported options are disabled with a reason on hover. Limited or unverified options remain selectable with warnings. Format choices adjust when switching model, GPU or engine, with a notice explaining the fallback. Warnings are ordered by severity.
+In the interface, pick a family in one of these groups, then a variant (memory size, form factor, rack).
 
-Any blocking error marks the configuration invalid. The UI retains theoretical memory figures but removes success indicators. Invalid configurations are excluded from sizing recommendations and comparison winners.
+| Engine | Profile |
+|---|---|
+| vLLM / llm-d | Reference: memory accounting and defaults from vLLM v0.32 source |
+| SGLang | 0.5.22 documentation and source, partially verified |
+| ZML / LLMD | LLMD documentation and ZML library code, partially verified |
 
-## Engine profiles
+**Formats:** BF16, FP16, FP8, INT8, INT4, MXFP4 and NVFP4 weights; BF16, FP16, FP8 and NVFP4 KV cache. A format needs both the GPU and the engine; limited or unverified ones carry a warning.
 
-Each profile declares weight and KV format support (`native`, `limited`, `unverified`, `unsupported`). An unverified format remains selectable but carries a warning.
+**Models:** 91 open-weight models from Mistral, Qwen, DeepSeek, Kimi, GLM, MiMo, Gemma, Llama, NVIDIA and more. Add one from Hugging Face in the UI, or with `pnpm run import-model --hf org/name --append`. Set `HF_TOKEN` for gated repositories.
 
-`memoryFormat` describes a conversion performed at load time, such as an FP8 file dequantized into BF16 GPU memory. Memory estimates use the loaded format. When the loaded precision is unverified, the estimate assumes the file format and also reports the BF16 alternative.
+Everything lives in `config/estimator.yaml`, read at startup. Point `KV_ESTIMATOR_CONFIG` at another YAML or JSON file to replace it without rebuilding. Run `pnpm run check-config` to validate a file. Schema and import details are in [docs/catalogue.md](docs/catalogue.md).
 
-Capabilities use three states: `true`, `false`, or `unverified`. They cover KV paging, pool preallocation, prefix caching, continuous batching, sliding-window attention, block reclamation, TP, PP, DP-attention and offload. Paging and pool preallocation can coexist.
+## Limits
 
-Sliding-window memory savings require both `slidingWindowAttention: true` and `slidingWindowFreesBlocks: true`. Missing attention support is a blocking error because model outputs would be incorrect. Unverified block reclamation means allocating the full context.
+These are capacity and first-order performance estimates, not benchmarks. Validate a model, engine and hardware combination before relying on it for production. Not modelled:
 
-`vendorFormats` restricts formats for one GPU vendor within an engine, for example AWQ/GPTQ, which vLLM does not support on ROCm.
+- prefix-cache reuse, speculative decoding and LoRA adapters;
+- encoder activations for vision and audio models;
+- queueing before prefill, and network latency between prefill and decode pools.
 
-`memory` describes how the engine sizes its KV pool. With `overheadInBudget: true` (vLLM), the memory fraction also pays for the profiled activation peak, non-PyTorch memory and CUDA graphs; with `false` (SGLang), `--mem-fraction-static` covers weights and KV only, and the overhead must fit in the reserve. `runtime` gives the scheduler defaults, optionally by GPU memory (`byMemory`); vLLM uses 16384 tokens per step and 1024 sequences from 160 GiB, 8192 / 1024 from 70 GiB except A100, and 2048 / 256 otherwise. `flags` provides the launch command and options for the indicative command line.
-
-### SGLang
-
-The profile follows SGLang 0.5.22: server arguments, quantization documentation and `memory_hook.py` for memory accounting. RadixAttention, the hybrid sliding-window pool, pipeline parallelism, DP-attention with expert parallelism (`--attn-dp-size`, `--ep-size`) and HiCache offloading are supported. The chunked-prefill size follows GPU memory (2048 to 16384 tokens). By default SGLang reserves at least 10 GiB outside its static fraction on GPUs above 60 GiB; a reserve smaller than the estimated activations raises a warning. The profile has medium confidence: it is sourced from documentation and code, not measured.
-
-### ZML / LLMD
-
-The profile distinguishes ZML's LLMD server from llm-d, the vLLM orchestrator.
-
-Server capabilities (PagedAttention, continuous batching, tensor parallelism and prefix caching) come from the [LLMD documentation](https://zml.ai/llmd/). Format, KV precision and sliding-window observations refer to the CUDA backend of [ZML at revision 3500e88](https://github.com/zml/zml/tree/3500e88cf84e0e98d37b0f6048e6af9d33bc6108), dated October 9, 2026. They do not establish that LLMD exposes every library capability:
-
-- FP8, MXFP4 and NVFP4 weights exist in the library and remain quantized in memory; LLMD loading support is unverified.
-- INT4 and INT8 are TODOs in `zml/nn.zig`.
-- FP8 KV is rejected by FA2/FA3 and disabled in the Triton wrapper.
-- Kernels apply sliding-window attention, but the library does not reclaim pages outside the window, so the profile applies no VRAM savings.
-
-Pool preallocation, PP, DP-attention and offload remain unverified in this profile.
-
-## Calculation model
-
-- Weights use parameter counts and effective bits, including quantization scales (for example INT4 g128 = 4.25 bits and NVFP4 = 4.5 bits). Embeddings, lm_head and designated unquantized parameters stay at 16 bits. `nativeBitsPerParam` handles specific native checkpoints, such as Kimi K2.5 INT4 g32 at 4.5 bits. `nativeNonExpertBitsPerParam` keeps the other quantized weights at their own precision when a native checkpoint quantizes only the experts further, such as DeepSeek V4 (FP4 experts, FP8 elsewhere); DP-attention replicates them at that precision.
-- GQA/MHA KV = layers x KV heads x (K dimension + V dimension) x bytes x tokens.
-- Sliding-window KV is capped only when the engine both applies the window and frees expired blocks.
-- MLA KV = layers x (latent rank + RoPE dimension) x bytes x tokens, plus DSA indexer storage and scales where applicable. Layers that read an earlier layer's latent (cross-layer KV sharing, `kvShared`) store only their indexer keys.
-- Linear/SSM cache is recurrent state plus convolution state, constant per request. `ssmStateBytes` can require FP32.
-- Compressed attention (DeepSeek V4 CSA/HCA, `compressed` layers) stores one shared K = V vector per `compressRatio` tokens, plus the most recent `window` tokens uncompressed and the sparse indexer keys per compressed entry (`extraBytesPerEntry`). TP replicates it like an MLA latent. The compressors' FP32 state is not counted.
-- TP shards KV heads and replicates them when TP exceeds their count. Each TP rank stores a full MLA latent.
-- PP uses whole layers and sizes for the most heavily loaded stage: ceil(layers / PP), selecting the most expensive cache layers because exact ordering is unknown. Input/output embeddings are included; tied embeddings are copied at both ends. PP greater than the decoder layer count is invalid.
-- DP-attention + EP shards only routed experts (`expertParamsB`). All non-expert tensors remain on every GPU at their respective precisions. Unknown expert parameter counts block capacity validation. Each request resides on one GPU.
-- Usable memory per GPU = visible memory − reserve − runtime overhead when the engine budget includes it (vLLM). Runtime overhead = max(activation peak, sampler logits) + fixed runtime memory + CUDA graphs. The activation peak covers one scheduling step of `maxNumBatchedTokens` tokens: the gated MLP's gate/up and activated outputs (3 × width × 2 bytes per token, sharded by TP) plus a few hidden-size buffers. The MLP width comes from the parameters per decoder layer (active experts for MoE). Sampler logits are `maxNumSeqs` × vocabulary × 4 bytes. A measured value from the engine's startup log can replace the estimate.
-- Sessions = floor((usable memory on the limiting GPU - its weights) / its KV per request). DP-attention sums the per-GPU session counts. Every session uses its full selected context; prefix reuse is ignored.
-- Total physical free KV memory = total usable memory - physical weights, including replicas. A separate conservative budget multiplies the limiting GPU's free memory by GPU count. This budget drives session capacity and is shown when it differs from physical free memory.
-- Model plus one KV reports physical usage, including replication. Its fit verdict uses the limiting GPU; a logical sum is also shown when different.
-- Recommendations exclude blocking format, parallelism, context and capacity errors. A visible-memory override applies only to its original GPU type.
-- Launch commands use the native repository or a format-specific `checkpoints` mapping. Missing checkpoints are explicitly marked as required input.
-- CPU offload parks queued, preempted or reusable sessions. It does not increase simultaneous decoding capacity. Reload time = per-GPU KV / CPU-to-GPU bandwidth.
-- Decode step time = max(bytes read / effective bandwidth, FLOPs / effective compute throughput) + collective latency. MoE reads account for experts touched by the batch. PP traverses stages. Prefill uses FLOPs including causal attention; one prompt runs on the GPUs of one PP stage. See `performance` in the catalogue for efficiency assumptions.
-- Workload (first order, no queueing): each request holds input + output/2 KV tokens on average, and concurrency is capped by that capacity and `maxNumSeqs`. Prefills take a share u = rate × prefill FLOPs / instance compute; compute-bound steps slow down by 1/(1 − u). TTFT = single-prompt prefill / (1 − u), ITL = step time at the solved concurrency, concurrency = rate × (TTFT + output × ITL) by Little's law. Replicas share the rate evenly. In prefill/decode disaggregation, the prefill pool runs prompts and sends their KV to the decode pool over `performance.networkGBsPerGpu`; the decode pool runs without prefill interference. Costs use `priceUsdPerHour` from the catalogue (indicative on-demand prices, October 2026) or the price entered for the selected card.
-- Not modelled: prefix-cache reuse, speculative decoding, LoRA adapters, vision/audio encoder activations, DeepSeek V4 compressor state, allocator fragmentation beyond the reserve, queueing before prefill, and network latency between prefill and decode pools. The report and the UI list these items.
-
-These are capacity and first-order performance estimates, not deployment benchmarks. Validate the chosen model, backend and hardware combination before relying on the result for production sizing.
-
-## Configuration schema
-
-Top-level sections are `defaults`, `performance`, `largeGpuCounts`, `weightFormats`, `kvCacheFormats`, `engines`, `gpus` and `models`. See the English comments in `config/estimator.yaml` and the strict schema in `src/lib/config-schema.ts`.
-
-Example model entry to add under `models` in a complete catalogue:
-
-```yaml
-- id: qwen3-32b
-  name: Qwen3-32B
-  family: Qwen (Alibaba)
-  source: Qwen/Qwen3-32B
-  revision: 9216db5781bf21249d130ec9da846c4624c16137
-  paramsB: 32.76
-  hiddenSize: 5120
-  vocabSize: 151936
-  attentionHeads: 64
-  layers:
-    - { kind: full, count: 64, kvHeads: 8, headDim: 128 }
-  maxContext: 32768
-  maxContextExtended: 131072
-  nativeWeightFormat: bf16
-  officialWeightFormats: [bf16, fp8, int4]
-```
-
-Layer kinds are `full`, `sliding` (`window`), `mla` (`kvLoraRank`, `ropeHeadDim`, `extraBytesPerToken`, `kvShared`) and `linear` (`ssmElements`, `convElements`).
-
-GPU entries can set `family` and `variant` (picker grouping: the family is chosen first, then the variant), `segment` (`datacenter` or `pcie`), `vendor` (`nvidia` or `amd`), `interconnect.fabric` (the scale-up fabric name used in messages, `NVLink` by default) and `priceUsdPerHour`. `defaults.workload` sets the initial workload. All new fields are optional, so catalogues written for earlier versions still validate.
-
-Text shown in the interface (descriptions, notes, support notes, labels, GPU names) accepts either one string for both languages or one string per language:
-
-```yaml
-notes:
-  - Same text in both languages.
-  - { fr: "Licence Mistral Research (usage commercial soumis à accord).", en: "Mistral Research License (commercial use requires an agreement)." }
-```
-
-The catalogue contains 91 models across Mistral, Z.ai (GLM), Moonshot (Kimi), Xiaomi (MiMo), Qwen, NVIDIA, Google (Gemma), DeepSeek, OpenAI (gpt-oss), Meta (Llama and Muse), MiniMax, Reflection AI, Aleph Alpha, StepFun, Meituan (LongCat), inclusionAI (Ling), Tencent (Hunyuan), Baidu (ERNIE), Cohere, IBM (Granite) and Microsoft (Phi). Entries with a verified configuration revision have upstream snapshots in `config/upstream/`, originally collected on `feat/kv-cache-estimator`. Other entries use public architecture information with a `confidence` level (`high`, `medium`, `low`); the UI marks medium and low confidence. Some active parameter counts, including Kimi K3, GLM-5.3, MiMo-V2.6-Pro and Ring-2.6-1T, are estimates. Muse Spark Open's official repository is gated, so its architecture comes from a public republication of its `config.json`.
-
-## Development checks
+## Development
 
 ```bash
-pnpm run check-config
-pnpm run typecheck
-pnpm test
-pnpm run build
+pnpm run check-config && pnpm run typecheck && pnpm test && pnpm run build
 ```
 
-Tests cover formulas, TP/PP/DP replication, offload, runtime overhead, throughput, workload and disaggregated sizing, the JSON report, Hugging Face downloads (mocked), the upstream configuration imports and a configuration matrix. GitHub Actions also builds and smoke-tests the production image, including `/api/estimate` under the base path.
+CI runs the same checks, then builds and smoke-tests the container at the root and under `/kv-estimator`.
 
-Keep source comments, docstrings and Markdown artifacts in English. Write every new UI string and catalogue message in both French and English: `t("…", "…")` from `usePrefs()` in components, `tr(lang)` in `src/lib`, `{ fr, en }` in the configuration. Do not edit upstream configuration snapshots to translate external source data.
+Write documentation, comments and docstrings in English. Do not edit the snapshots in `config/upstream/`, which are copies of external `config.json` files. Every UI string and catalogue message exists in French and English: `t("…", "…")` in components, `tr(lang)` in `src/lib`, `{ fr, en }` in the catalogue.
