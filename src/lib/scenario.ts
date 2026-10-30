@@ -63,7 +63,7 @@ export function scenarioFromQuery(cfg: AppConfig, models: ModelSpec[], q: QueryP
   const model = models.find((m) => m.id === q.model) ?? models.find((m) => m.id === d.model) ?? models[0];
   const gpu = cfg.gpus.find((g) => g.id === q.gpu) ?? cfg.gpus.find((g) => g.id === d.gpu) ?? cfg.gpus[0];
   const engine = cfg.engines.find((e) => e.id === q.eng) ?? cfg.engines.find((e) => e.id === d.engine) ?? cfg.engines[0];
-  const counts = gpuCountOptions(cfg, gpu);
+  const counts = gpuCountOptions(cfg, gpu, model, engine);
   const nq = numParam(q.n);
   const gpuCount = nq !== undefined && counts.includes(nq) ? nq : counts.includes(d.gpuCount ?? 1) ? (d.gpuCount ?? 1) : 1;
   // Compatibility with legacy links: ?p=tp|pp|dp-attention

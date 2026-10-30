@@ -258,7 +258,7 @@ export function sizeForWorkload(cfg: AppConfig, base: SizingBase, w: Workload, b
     const { wfId, kfId, notes } = formatsFor(cfg, base, gpu);
     const price = gpu.id === baseGpuId && priceOverride ? priceOverride : gpu.priceUsdPerHour;
     let best: { input: EstimateInput; plan: WorkloadAnalysis; gpus: number; unverified: boolean } | null = null;
-    for (const n of gpuCountOptions(cfg, gpu)) {
+    for (const n of gpuCountOptions(cfg, gpu, base.model, base.engine)) {
       // A larger instance cannot use fewer GPUs than the best total found so far.
       if (best && n > best.gpus) break;
       for (const input of instanceInputs(cfg, base, gpu, n, baseGpuId)) {

@@ -33,10 +33,72 @@ export function pickKvFormat(cfg: AppConfig, g: GpuSpec, e: EngineSpec, current?
   return cfg.kvCacheFormats.find((f) => usable(kvSupport(g, e, f.id).level))?.id ?? cfg.kvCacheFormats[0].id;
 }
 
-/** Available GPU counts: 1-8, then larger sizes (72 is reserved for NVL72 domains). */
-export function gpuCountOptions(cfg: AppConfig, g: GpuSpec): number[] {
+/**
+ * Available GPU counts, ascending: 1-8, the large sizes (72 is reserved for NVL72 domains), and the
+ * intermediate sizes usable for this card, model and engine (see `intermediateCountUsable`).
+ */
+export function gpuCountOptions(cfg: AppConfig, g: GpuSpec, model: ModelSpec, engine: EngineSpec): number[] {
   const large = cfg.largeGpuCounts.filter((c) => c % 72 !== 0 || g.nvlinkDomain >= 72);
-  return [1, 2, 3, 4, 5, 6, 7, 8, ...large];
+  const intermediate = cfg.intermediateGpuCounts.filter((c) => !large.includes(c) && intermediateCountUsable(cfg, g, model, engine, c));
+  return [1, 2, 3, 4, 5, 6, 7, 8, ...large, ...intermediate].sort((a, b) => a - b);
+}
+
+/** Whole servers of the card, or a single interconnect domain (GB200 NVL72 trays of 4, for example). */
+export function fitsTopology(g: GpuSpec, n: number): boolean {
+  return n % g.maxGpusPerNode === 0 || n <= g.nvlinkDomain;
+}
+
+/**
+ * Blocking issues that depend on the parallel layout itself. Format, context and capacity errors do not
+ * decide whether a size is offered: they do not depend on the layout, or they change with the context and
+ * the reserve, and a larger instance is often what makes the model fit.
+ */
+const LAYOUT_ERRORS = new Set([
+  "tp-unsupported",
+  "pp-unsupported",
+  "tp-heads-not-divisible",
+  "tp-kv-heads-incompatible",
+  "pp-exceeds-layers",
+  "gpus-not-divisible-by-tp",
+  "dp-attention-unavailable",
+  "dp-attention-expert-params-unknown",
+]);
+
+/**
+ * Cache of `intermediateCountUsable`, by model, engine and card object (stable across renders in the UI).
+ * The configuration is not part of the key: it only supplies formats, which layout errors do not depend on.
+ */
+const layoutCache = new WeakMap<ModelSpec, WeakMap<EngineSpec, WeakMap<GpuSpec, Map<number, boolean>>>>();
+
+function cached<K extends object, V>(map: WeakMap<K, V>, key: K, make: () => V): V {
+  let v = map.get(key);
+  if (v === undefined) map.set(key, (v = make()));
+  return v;
+}
+
+/**
+ * An intermediate size is usable when it fits the card's topology and at least one layout from
+ * `instanceInputs` (a valid TP degree with the rest in PP, or DP-attention + EP for MoE) has no layout error.
+ */
+export function intermediateCountUsable(cfg: AppConfig, g: GpuSpec, model: ModelSpec, engine: EngineSpec, n: number): boolean {
+  if (!fitsTopology(g, n)) return false;
+  const byCount = cached(cached(cached(layoutCache, model, () => new WeakMap()), engine, () => new WeakMap()), g, () => new Map<number, boolean>());
+  let ok = byCount.get(n);
+  if (ok === undefined) {
+    const base: SizingBase = {
+      model,
+      engine,
+      contextTokens: model.maxContext,
+      reservePct: cfg.defaults.reservePct ?? 10,
+      weightFormatId: model.nativeWeightFormat,
+      kvFormatId: cfg.defaults.kvCacheFormat ?? "bf16",
+    };
+    ok = instanceInputs(cfg, base, g, n).some(
+      (input) => !collectIssues(input, estimate(input), cfg.weightFormats).some((i) => i.severity === "error" && LAYOUT_ERRORS.has(i.code)),
+    );
+    byCount.set(n, ok);
+  }
+  return ok;
 }
 
 export function divisors(n: number): number[] {
@@ -123,7 +185,7 @@ export function sizeForTarget(
     const { wfId, kfId, notes } = formatsFor(cfg, base, gpu);
 
     let found: SizingRow | null = null;
-    for (const n of gpuCountOptions(cfg, gpu)) {
+    for (const n of gpuCountOptions(cfg, gpu, base.model, base.engine)) {
       // Among configurations reaching the target, keep the highest aggregate throughput
       // (measured at the target concurrency, not at full capacity).
       let best: { input: EstimateInput; sessions: number; rate: number; score: number; unverified: boolean } | null = null;

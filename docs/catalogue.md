@@ -16,7 +16,9 @@ Invalid configuration produces an error page. The schema is strict: unknown or m
 
 ## Configuration schema
 
-Top-level sections are `defaults`, `performance`, `largeGpuCounts`, `weightFormats`, `kvCacheFormats`, `engines`, `gpus` and `models`. See the English comments in `config/estimator.yaml` and the strict schema in `src/lib/config-schema.ts`.
+Top-level sections are `defaults`, `performance`, `largeGpuCounts`, `intermediateGpuCounts`, `weightFormats`, `kvCacheFormats`, `engines`, `gpus` and `models`. See the English comments in `config/estimator.yaml` and the strict schema in `src/lib/config-schema.ts`.
+
+`largeGpuCounts` (default `[16, 32, 64, 72]`) are always offered above 8 GPUs, 72 only for NVL72 domains. `intermediateGpuCounts` (default `[12, 24, 48]`, optional) are offered only for cards whose servers or interconnect domain they fill, and when the model and engine have a valid layout at that size; set it to `[]` to keep the previous list. See [GPU counts](calculation.md#gpu-counts).
 
 Example model entry to add under `models` in a complete catalogue:
 

@@ -129,6 +129,14 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
     return { wf: nextWf, kf: nextKf };
   };
 
+  /** Keep the GPU count when it is still offered for this card, model and engine; otherwise fall back to 8. */
+  const adjustCount = (m: ModelSpec, g: GpuSpec, e: EngineSpec, msgs: Notice[]) => {
+    if (gpuCountOptions(config, g, m, e).includes(s.gpuCount)) return s.gpuCount;
+    const why = g.id !== gpu.id ? g.name : m.id !== model.id ? m.name : e.name;
+    msgs.push(notice(`${s.gpuCount} GPUs non proposé pour ${why} → 8.`, `${s.gpuCount} GPUs not offered for ${why} → 8.`));
+    return 8;
+  };
+
   const setModel = (id: string) => {
     const m = models.find((x) => x.id === id)!;
     const msgs: Notice[] = [];
@@ -145,15 +153,14 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
       mode = "tp-pp";
       msgs.push(notice("DP-attention réservé aux MoE → TP/PP.", "DP-attention is for MoE models only → TP/PP."));
     }
+    const n = adjustCount(m, gpu, engine, msgs);
     setNotices(msgs);
-    setS({ ...s, modelId: id, wf: nextWf, mode, tp: defaultTp(m, gpu, s.gpuCount) });
+    setS({ ...s, modelId: id, wf: nextWf, mode, gpuCount: n, tp: defaultTp(m, gpu, n) });
   };
   const setGpu = (id: string) => {
     const g = config.gpus.find((x) => x.id === id)!;
     const msgs: Notice[] = [];
-    const counts = gpuCountOptions(config, g);
-    const n = counts.includes(s.gpuCount) ? s.gpuCount : 8;
-    if (n !== s.gpuCount) msgs.push(notice(`${s.gpuCount} GPUs non proposé pour ${g.name} → ${n}.`, `${s.gpuCount} GPUs not offered for ${g.name} → ${n}.`));
+    const n = adjustCount(model, g, engine, msgs);
     const f = adjustFormats(model, g, engine, msgs);
     // Custom visible memory belongs to one GPU type: reset it when switching.
     if (s.memGiB !== undefined)
@@ -172,8 +179,9 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
       mode = "tp-pp";
       msgs.push(notice(`DP-attention indisponible dans ${e.name} → TP/PP.`, `DP-attention unavailable in ${e.name} → TP/PP.`));
     }
+    const n = adjustCount(model, gpu, e, msgs);
     setNotices(msgs);
-    setS({ ...s, engineId: id, mode, ...f });
+    setS({ ...s, engineId: id, mode, ...f, ...(n !== s.gpuCount && { gpuCount: n, tp: defaultTp(model, gpu, n) }) });
   };
   const update = (patch: Partial<Scenario>) => {
     setNotices([]);
@@ -213,8 +221,10 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
     writeStorage(STORAGE.imported, next);
     const m = localize(source, lang);
     const nextWf = pickWeightFormat(config, m, gpu, engine);
-    setNotices([notice(`${m.name} ajouté à la liste des modèles.`, `${m.name} added to the model list.`)]);
-    setS({ ...s, modelId: m.id, wf: nextWf, mode: s.mode === "dp-ep" && !dpAllowed(m, engine) ? "tp-pp" : s.mode, tp: defaultTp(m, gpu, s.gpuCount) });
+    const msgs = [notice(`${m.name} ajouté à la liste des modèles.`, `${m.name} added to the model list.`)];
+    const n = adjustCount(m, gpu, engine, msgs);
+    setNotices(msgs);
+    setS({ ...s, modelId: m.id, wf: nextWf, mode: s.mode === "dp-ep" && !dpAllowed(m, engine) ? "tp-pp" : s.mode, gpuCount: n, tp: defaultTp(m, gpu, n) });
   };
   const clearImported = () => {
     setImported([]);
@@ -266,7 +276,7 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
       title: [f.description, sup.level !== "native" ? supportLevelLabel(sup.level, lang) : null, sup.note].filter(Boolean).join("\n"),
     };
   });
-  const countOptions: ChipOption[] = gpuCountOptions(config, gpu).map((n) => {
+  const countOptions: ChipOption[] = gpuCountOptions(config, gpu, model, engine).map((n) => {
     const reasons: string[] = [];
     if (n > 1 && !gpu.interconnect.nvlink) reasons.push(t("pas de liaison GPU↔GPU dédiée", "no dedicated GPU↔GPU link"));
     if (n > gpu.maxGpusPerNode) reasons.push(t(`${Math.ceil(n / gpu.maxGpusPerNode)} nœuds`, `${Math.ceil(n / gpu.maxGpusPerNode)} nodes`));
