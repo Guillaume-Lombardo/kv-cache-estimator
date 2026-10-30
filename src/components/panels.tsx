@@ -71,6 +71,7 @@ export function ModelCard({ model: m }: { model: ModelSpec }) {
           <dd>
             {m.nativeWeightFormat.toUpperCase()}
             {m.nativeBitsPerParam && <span className="muted"> ({m.nativeBitsPerParam} bits)</span>}
+            {m.nativeNonExpertBitsPerParam && <span className="muted"> {t(`(experts ; reste ${m.nativeNonExpertBitsPerParam} bits)`, `(experts; rest ${m.nativeNonExpertBitsPerParam} bits)`)}</span>}
           </dd>
         </div>
         <div>

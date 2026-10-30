@@ -255,6 +255,13 @@ describe("review e00a496", async () => {
     expect(collectIssues(unknown, estimate(unknown), cfg.weightFormats).some((x) => x.severity === "error" && x.title.includes("experts inconnus"))).toBe(true);
   });
 
+  it("DP-attention : experts FP4 répartis, autres poids FP8 répliqués (DeepSeek-V4.1-Flash)", () => {
+    const e = estimate(input(cfg, { model: "deepseek-v4.1-flash", gpu: "b300", wf: "mxfp4", gpuCount: 8, mode: "dp-ep" }));
+    const keep = 129280 * 5120 * 2 + 0.69e9;
+    expect(e.weights.nonExpertBytes).toBeCloseTo((748e9 - keep - 543.6e9) + keep * 2, -6);
+    expect(e.weights.totalBytes - e.weights.nonExpertBytes).toBeCloseTo((543.6e9 * 4.25) / 8, -6);
+  });
+
   it("P2 commande : checkpoint à fournir hors format natif", () => {
     const i = input(cfg, { model: "qwen3-8b", wf: "nvfp4", gpu: "b200" });
     const c = launchCommand(i, 1, 1)!;

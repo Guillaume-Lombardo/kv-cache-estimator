@@ -184,7 +184,10 @@ export function weightBytes(m: ModelSpec, f: WeightFormat) {
   const total = m.paramsB * 1e9;
   if (bits >= 16) return { bytes: (total * bits) / 8, quantized: total, unquantized: 0, bits };
   const keep = Math.min(total, embeddingParams(m) + m.extraUnquantizedParamsB * 1e9);
-  return { bytes: ((total - keep) * bits) / 8 + keep * 2, quantized: total - keep, unquantized: keep, bits };
+  // Native checkpoints may quantize routed experts further than the rest (DeepSeek V4: FP4 experts, FP8 elsewhere).
+  const nonExpertBits = f.id === m.nativeWeightFormat && m.nativeNonExpertBitsPerParam ? m.nativeNonExpertBitsPerParam : bits;
+  const experts = Math.min(total - keep, (m.expertParamsB ?? 0) * 1e9);
+  return { bytes: (experts * bits + (total - keep - experts) * nonExpertBits) / 8 + keep * 2, quantized: total - keep, unquantized: keep, bits };
 }
 
 export function isMoE(m: ModelSpec): boolean {

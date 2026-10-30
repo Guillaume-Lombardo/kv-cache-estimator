@@ -292,7 +292,7 @@ Pool preallocation, PP, DP-attention and offload remain unverified in this profi
 
 ## Calculation model
 
-- Weights use parameter counts and effective bits, including quantization scales (for example INT4 g128 = 4.25 bits and NVFP4 = 4.5 bits). Embeddings, lm_head and designated unquantized parameters stay at 16 bits. `nativeBitsPerParam` handles specific native checkpoints, such as Kimi K2.5 INT4 g32 at 4.5 bits.
+- Weights use parameter counts and effective bits, including quantization scales (for example INT4 g128 = 4.25 bits and NVFP4 = 4.5 bits). Embeddings, lm_head and designated unquantized parameters stay at 16 bits. `nativeBitsPerParam` handles specific native checkpoints, such as Kimi K2.5 INT4 g32 at 4.5 bits. `nativeNonExpertBitsPerParam` keeps the other quantized weights at their own precision when a native checkpoint quantizes only the experts further, such as DeepSeek V4 (FP4 experts, FP8 elsewhere); DP-attention replicates them at that precision.
 - GQA/MHA KV = layers x KV heads x (K dimension + V dimension) x bytes x tokens.
 - Sliding-window KV is capped only when the engine both applies the window and frees expired blocks.
 - MLA KV = layers x (latent rank + RoPE dimension) x bytes x tokens, plus DSA indexer storage and scales where applicable. Layers that read an earlier layer's latent (cross-layer KV sharing, `kvShared`) store only their indexer keys.

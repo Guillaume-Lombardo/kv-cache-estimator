@@ -1374,7 +1374,7 @@ models:
       - { kind: compressed, count: 1, headDim: 512, compressRatio: 1, window: 128, extraBytesPerEntry: 68 }
     maxContext: 1048576
     nativeWeightFormat: mxfp4
-    nativeBitsPerParam: 5.27
+    nativeNonExpertBitsPerParam: 8
     officialWeightFormats: [mxfp4]
     kvFormatNotes:
       nvfp4: { level: info, note: { fr: "Format KV officiel (E2M1, une échelle E4M3 par 16 canaux) : 890 o par token publiés par DeepSeek.", en: "Official KV format (E2M1, one E4M3 scale per 16 channels): 890 B per token published by DeepSeek." } }
@@ -1403,7 +1403,7 @@ models:
       - { kind: compressed, count: 30, headDim: 512, compressRatio: 4, window: 128, extraBytesPerEntry: 68 }
     maxContext: 1048576
     nativeWeightFormat: mxfp4
-    nativeBitsPerParam: 4.3
+    nativeNonExpertBitsPerParam: 8
     officialWeightFormats: [mxfp4]
     tags: [moe, reasoning]
     notes:
@@ -1430,7 +1430,7 @@ models:
       - { kind: compressed, count: 20, headDim: 512, compressRatio: 128, window: 128 }
     maxContext: 1048576
     nativeWeightFormat: mxfp4
-    nativeBitsPerParam: 4.32
+    nativeNonExpertBitsPerParam: 8
     officialWeightFormats: [mxfp4]
     tags: [moe, reasoning]
     notes:

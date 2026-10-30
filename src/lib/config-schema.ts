@@ -213,6 +213,8 @@ export const modelSchema = z.strictObject({
   nativeWeightFormat: z.string(),
   /** Effective bits in the native checkpoint if different from the generic format (e.g. INT4 g32 = 4.5). */
   nativeBitsPerParam: z.number().positive().optional(),
+  /** Effective bits of the native checkpoint's quantized non-expert weights when the experts use fewer (e.g. FP8 next to FP4 experts). */
+  nativeNonExpertBitsPerParam: z.number().positive().optional(),
   officialWeightFormats: z.array(z.string()).default([]),
   /** Official checkpoint repository per format (native format uses source). */
   checkpoints: z.record(z.string(), z.string()).default({}),
