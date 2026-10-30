@@ -21,6 +21,7 @@ export function archLabel(m: ModelSpec, lang: Lang): string {
   const kinds = new Set(m.layers.map((g) => g.kind));
   const linear = lang === "en" ? "Linear" : "Linéaire";
   if (kinds.has("linear")) return kinds.has("mla") ? `${linear} + MLA` : `${linear} + GQA`;
+  if (kinds.has("compressed")) return "CSA/HCA";
   if (kinds.has("mla")) return "MLA";
   if (kinds.has("sliding")) return "SWA + GQA";
   return "GQA";

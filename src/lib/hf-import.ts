@@ -88,6 +88,8 @@ function detectNativeFormat(q: Json | undefined, dtype: unknown): { format: stri
     const method = String(q.quant_method ?? "").toLowerCase();
     const algo = String(q.quant_algo ?? "").toLowerCase();
     if (method === "mxfp4") return { format: "mxfp4" };
+    // DeepSeek V4: FP4 experts (E8M0 scale per 32) dominate the weights, the rest is FP8.
+    if (String(q.expert_dtype ?? "").toLowerCase() === "fp4") return { format: "mxfp4" };
     if (algo.includes("nvfp4") || method === "nvfp4") return { format: "nvfp4" };
     // ModelOpt mixed precision (e.g. NVFP4 experts, FP8 elsewhere): the experts dominate the weights.
     if (algo === "mixed_precision" && JSON.stringify(q.quantized_layers ?? {}).includes("NVFP4")) return { format: "nvfp4" };
@@ -146,6 +148,13 @@ function estimateParams(t: Json, groups: LayerGroup[], tied: boolean, linearPara
       const q = qLora ? H * qLora + qLora * heads * qk : H * heads * qk;
       const kvA = g.kvShared ? 0 : H * (g.kvLoraRank + g.ropeHeadDim);
       attention += g.count * (q + kvA + g.kvLoraRank * heads * (nope + v) + heads * v * H);
+    } else if (g.kind === "compressed") {
+      // DeepSeek V4: low-rank Q, one shared K = V projection, grouped low-rank output.
+      const qLora = num(t.q_lora_rank) ?? 0;
+      const oLora = num(t.o_lora_rank) ?? 0;
+      const q = qLora ? H * qLora + qLora * heads * g.headDim : H * heads * g.headDim;
+      const o = oLora ? heads * g.headDim * oLora + (num(t.o_groups) ?? 1) * oLora * H : heads * g.headDim * H;
+      attention += g.count * (q + H * g.headDim + o);
     } else {
       attention += g.count * linearParamsPerLayer;
     }
@@ -203,6 +212,13 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
   const text = obj(cfg.text_config) ?? obj(cfg.llm_config) ?? obj(cfg.language_config) ?? obj(cfg.thinker_config);
   const t: Json = text ? { ...cfg, ...text } : cfg;
   const multimodal = !!text || !!cfg.vision_config || !!cfg.vision_encoder;
+  if (Array.isArray(t.layers_block_type) && typeof t.hybrid_override_pattern !== "string") {
+    // Nemotron-H written as block names (Nemotron 3.5): same layout as hybrid_override_pattern.
+    const blocks = t.layers_block_type as string[];
+    const codes: Record<string, string> = { mamba: "M", attention: "*", moe: "E" };
+    t.hybrid_override_pattern = blocks.map((b) => codes[b] ?? "-").join("");
+    t.num_hidden_layers ??= blocks.length;
+  }
 
   const H = num(t.hidden_size) ?? num(t.d_model);
   const L = num(t.num_hidden_layers) ?? num(t.num_layers);
@@ -274,6 +290,27 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
   // --- Attention layers
   if (typeof t.hybrid_override_pattern === "string") {
     // Already handled
+  } else if (Array.isArray(t.compress_ratios)) {
+    // DeepSeek V4 CSA/HCA: each layer keeps a window of raw K = V vectors; a layer with ratio r also
+    // stores one pooled vector per r tokens. Entries after num_hidden_layers are MTP layers. V4.1
+    // compresses only in kv_source_layer_ids (later layers read those entries); V4 compresses in every
+    // layer with a ratio and indexes the ratio-4 ones, as in the reference inference code.
+    const ratios = (t.compress_ratios as number[]).slice(0, L);
+    const sources = Array.isArray(t.kv_source_layer_ids) ? (t.kv_source_layer_ids as number[]) : undefined;
+    const indexSources = Array.isArray(t.index_source_layer_ids) ? (t.index_source_layer_ids as number[]) : undefined;
+    const idxDim = num(t.index_head_dim);
+    // FP4 indexer keys + one 4-byte scale per entry, as in DeepSeek's published per-token KV sizes.
+    const idxBytes = idxDim ? idxDim / 2 + 4 : 0;
+    const buckets = new Map<string, LayerGroup & { kind: "compressed" }>();
+    ratios.forEach((r, i) => {
+      const owns = r > 0 && (!sources || sources.includes(i));
+      const indexed = owns && idxBytes > 0 && (sources ? !indexSources || indexSources.includes(i) : r === 4);
+      const key = `${owns ? r : 0}/${indexed}`;
+      const g = buckets.get(key);
+      if (g) g.count++;
+      else buckets.set(key, { kind: "compressed", count: 1, headDim, ...(owns ? { compressRatio: r } : {}), window: window ?? 128, ...(indexed ? { extraBytesPerEntry: idxBytes } : {}) });
+    });
+    groups.push(...buckets.values());
   } else if (num(t.kv_lora_rank)) {
     const attnCount = linCfg && Array.isArray(linCfg.full_attn_layers) ? (linCfg.full_attn_layers as unknown[]).length : L - linearCount;
     const rope = t.mla_use_nope === true ? 0 : (num(t.qk_rope_head_dim) ?? 64);
@@ -403,7 +440,7 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
 
   // --- Native format
   const q = obj(t.quantization_config) ?? obj(cfg.quantization_config);
-  const nativeFmt = detectNativeFormat(q, t.torch_dtype ?? t.dtype ?? cfg.torch_dtype ?? cfg.dtype);
+  const nativeFmt = detectNativeFormat(q && t.expert_dtype ? { ...q, expert_dtype: t.expert_dtype } : q, t.torch_dtype ?? t.dtype ?? cfg.torch_dtype ?? cfg.dtype);
   let extraUnq = 0;
   if (metaParams && nativeFmt.format !== "bf16" && nativeFmt.format !== "fp16") {
     const bf16 = ((num(metaParams.BF16) ?? 0) + (num(metaParams.F16) ?? 0) + (num(metaParams.F32) ?? 0)) / 1e9;

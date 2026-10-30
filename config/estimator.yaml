@@ -416,6 +416,7 @@ gpus:
 #   sliding : sliding window / chunk   { count, kvHeads, headDim, headDimV?, window }
 #   mla     : Multi-head Latent Attention { count, kvLoraRank, ropeHeadDim, extraBytesPerToken? }
 #   linear  : Mamba / DeltaNet / KDA      { count, ssmElements, convElements }  (constant state)
+#   compressed: DeepSeek V4 CSA/HCA      { count, headDim, compressRatio?, window, extraBytesPerEntry? }
 # Layers without a cache (MLP-only, MTP) are omitted.
 # revision: Hugging Face revision of the verified config.json (snapshot in config/upstream/).
 # checkpoints: official repository per quantized format (used by the launch command).
@@ -1065,6 +1066,54 @@ models:
     tags: [reasoning]
 
   # ================================================================ Qwen
+  - id: qwen3.6-35b-a3b
+    name: Qwen3.6-35B-A3B
+    family: Qwen (Alibaba)
+    source: Qwen/Qwen3.6-35B-A3B
+    revision: 995ad96eacd98c81ed38be0c5b274b04031597b0
+    paramsB: 35.95
+    activeParamsB: 3
+    expertParamsB: 32.2
+    hiddenSize: 2048
+    vocabSize: 248320
+    extraUnquantizedParamsB: 0.4
+    attentionHeads: 16
+    layers:
+      - { kind: linear, count: 30, ssmElements: 524288, convElements: 24576, label: { fr: "Gated DeltaNet (état constant)", en: "Gated DeltaNet (constant state)" } }
+      - { kind: full, count: 10, kvHeads: 2, headDim: 256 }
+    maxContext: 262144
+    maxContextExtended: 1010000
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16, fp8]
+    checkpoints: { fp8: Qwen/Qwen3.6-35B-A3B-FP8 }
+    ssmStateBytes: 4
+    tags: [moe, hybrid, vision, code]
+    notes:
+      - { fr: "Même architecture que Qwen3.5-35B-A3B. États DeltaNet en FP32 (mamba_ssm_dtype du config.json). Licence Apache 2.0.", en: "Same architecture as Qwen3.5-35B-A3B. DeltaNet states in FP32 (mamba_ssm_dtype in config.json). Apache 2.0 License." }
+
+  - id: qwen3.6-27b
+    name: Qwen3.6-27B
+    family: Qwen (Alibaba)
+    source: Qwen/Qwen3.6-27B
+    revision: 6a9e13bd6fc8f0983b9b99948120bc37f49c13e9
+    paramsB: 27.78
+    hiddenSize: 5120
+    vocabSize: 248320
+    extraUnquantizedParamsB: 0.4
+    attentionHeads: 24
+    layers:
+      - { kind: linear, count: 48, ssmElements: 786432, convElements: 30720, label: { fr: "Gated DeltaNet (état constant)", en: "Gated DeltaNet (constant state)" } }
+      - { kind: full, count: 16, kvHeads: 4, headDim: 256 }
+    maxContext: 262144
+    maxContextExtended: 1010000
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16, fp8]
+    checkpoints: { fp8: Qwen/Qwen3.6-27B-FP8 }
+    ssmStateBytes: 4
+    tags: [hybrid, vision, code]
+    notes:
+      - { fr: "Dense hybride : 3 couches Gated DeltaNet pour 1 couche d'attention. États DeltaNet en FP32. Licence Apache 2.0.", en: "Dense hybrid: 3 Gated DeltaNet layers per attention layer. DeltaNet states in FP32. Apache 2.0 License." }
+
   - id: qwen3.5-397b
     name: Qwen3.5-397B-A17B
     family: Qwen (Alibaba)
@@ -1305,6 +1354,90 @@ models:
     officialWeightFormats: [bf16, int8, int4]
 
   # ================================================================ DeepSeek
+  - id: deepseek-v4.1-flash
+    name: DeepSeek-V4.1-Flash (552B + Engram, A16B)
+    family: DeepSeek
+    source: deepseek-ai/DeepSeek-V4.1-Flash-1017
+    revision: 1bae0e1088993b9b82de08f59de5be5a34e42170
+    paramsB: 748
+    activeParamsB: 16
+    expertParamsB: 543.6
+    hiddenSize: 5120
+    vocabSize: 129280
+    extraUnquantizedParamsB: 0.69
+    attentionHeads: 64
+    layers:
+      # CSA2: only layers 2, 8, 14 and 20 compress the KV (ratios 2, 2, 2, 1) and own the FP4 indexer
+      # keys; the other layers read those entries and keep only their 128-token window.
+      - { kind: compressed, count: 36, headDim: 512, window: 128 }
+      - { kind: compressed, count: 3, headDim: 512, compressRatio: 2, window: 128, extraBytesPerEntry: 68 }
+      - { kind: compressed, count: 1, headDim: 512, compressRatio: 1, window: 128, extraBytesPerEntry: 68 }
+    maxContext: 1048576
+    nativeWeightFormat: mxfp4
+    nativeBitsPerParam: 5.27
+    officialWeightFormats: [mxfp4]
+    kvFormatNotes:
+      nvfp4: { level: info, note: { fr: "Format KV officiel (E2M1, une échelle E4M3 par 16 canaux) : 890 o par token publiés par DeepSeek.", en: "Official KV format (E2M1, one E4M3 scale per 16 channels): 890 B per token published by DeepSeek." } }
+    tags: [moe, vision, reasoning]
+    confidence: medium
+    notes:
+      - { fr: "Encodeur-décodeur causal : 552 B de backbone + 196 B d'Engram (tables FP8 consultées par token), comptés sur GPU. Experts FP4, reste FP8.", en: "Causal encoder-decoder: 552 B backbone + 196 B Engram (FP8 tables looked up per token), counted on the GPU. FP4 experts, FP8 elsewhere." }
+      - { fr: "8 B de paramètres actifs en prefill, 16 B en décodage. Têtes DSpark (MTP) non comptées.", en: "8 B active parameters in prefill, 16 B in decode. DSpark (MTP) heads not counted." }
+      - { fr: "Licence MIT.", en: "MIT License." }
+
+  - id: deepseek-v4-pro
+    name: DeepSeek-V4-Pro (1.6T-A49B)
+    family: DeepSeek
+    source: deepseek-ai/DeepSeek-V4-Pro
+    revision: b5968e9190ef611bbf34a7229255be88a0e937c1
+    paramsB: 1572
+    activeParamsB: 49
+    expertParamsB: 1547.4
+    hiddenSize: 7168
+    vocabSize: 129280
+    extraUnquantizedParamsB: 1.05
+    attentionHeads: 128
+    layers:
+      # Hybrid attention: CSA (1 entry per 4 tokens + FP4 indexer) alternates with HCA (1 per 128).
+      - { kind: compressed, count: 31, headDim: 512, compressRatio: 128, window: 128 }
+      - { kind: compressed, count: 30, headDim: 512, compressRatio: 4, window: 128, extraBytesPerEntry: 68 }
+    maxContext: 1048576
+    nativeWeightFormat: mxfp4
+    nativeBitsPerParam: 4.3
+    officialWeightFormats: [mxfp4]
+    tags: [moe, reasoning]
+    notes:
+      - { fr: "Experts en FP4 (échelle E8M0 par 32), reste en FP8 (~850 Go). Le module MTP (~27 B) n'est pas compté.", en: "FP4 experts (E8M0 scale per 32), FP8 elsewhere (~850 GB). The MTP module (~27 B) is not counted." }
+      - { fr: "Clés RoPE stockées en BF16 dans le cache officiel : environ +12 % par rapport au KV FP8 estimé.", en: "RoPE keys are stored in BF16 in the official cache: about +12% over the estimated FP8 KV." }
+      - { fr: "Licence MIT. Mise à jour 0813 avec la même architecture.", en: "MIT License. 0813 update with the same architecture." }
+
+  - id: deepseek-v4-flash
+    name: DeepSeek-V4-Flash (284B-A13B)
+    family: DeepSeek
+    source: deepseek-ai/DeepSeek-V4-Flash
+    revision: 60d8d70770c6776ff598c94bb586a859a38244f1
+    paramsB: 284
+    activeParamsB: 13
+    expertParamsB: 277
+    hiddenSize: 4096
+    vocabSize: 129280
+    extraUnquantizedParamsB: 0.39
+    attentionHeads: 64
+    layers:
+      # Layers 0-1: 128-token window only. Then CSA (1 entry per 4 tokens + FP4 indexer) alternates with HCA (1 per 128).
+      - { kind: compressed, count: 2, headDim: 512, window: 128 }
+      - { kind: compressed, count: 21, headDim: 512, compressRatio: 4, window: 128, extraBytesPerEntry: 68 }
+      - { kind: compressed, count: 20, headDim: 512, compressRatio: 128, window: 128 }
+    maxContext: 1048576
+    nativeWeightFormat: mxfp4
+    nativeBitsPerParam: 4.32
+    officialWeightFormats: [mxfp4]
+    tags: [moe, reasoning]
+    notes:
+      - { fr: "Experts en FP4 (échelle E8M0 par 32), reste en FP8 (~155 Go). Le module MTP (~7 B) n'est pas compté.", en: "FP4 experts (E8M0 scale per 32), FP8 elsewhere (~155 GB). The MTP module (~7 B) is not counted." }
+      - { fr: "DeepSeek publie 3 514 o par token de KV global (RoPE en BF16) ; l'estimation en KV FP8 donne 3 125 o.", en: "DeepSeek publishes 3,514 B per token of global KV (RoPE in BF16); the FP8 KV estimate gives 3,125 B." }
+      - { fr: "Licence MIT.", en: "MIT License." }
+
   - id: deepseek-v3.2
     name: DeepSeek-V3.2 (671B-A37B)
     family: DeepSeek
@@ -1405,6 +1538,32 @@ models:
     officialWeightFormats: [mxfp4]
     tags: [moe, swa, reasoning]
 
+  # ================================================================ Meta (Muse)
+  - id: muse-spark-open
+    name: Muse Spark Open (816B-A42B)
+    family: Meta (Muse)
+    source: meta-models/Muse-Spark-Open-816B-A42B
+    revision: 0fb02478b02565b2ce7fc57e6051c91172774ac9
+    paramsB: 822.04
+    activeParamsB: 42
+    expertParamsB: 798.9
+    hiddenSize: 8192
+    vocabSize: 202048
+    extraUnquantizedParamsB: 6
+    attentionHeads: 128
+    layers:
+      - { kind: sliding, count: 46, kvHeads: 16, headDim: 64, window: 2048 }
+      - { kind: full, count: 16, kvHeads: 16, headDim: 64 }
+    maxContext: 1048576
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16]
+    tags: [moe, swa, vision]
+    confidence: medium
+    notes:
+      - { fr: "Dépôt officiel à accès restreint : architecture lue dans le config.json republié par ml-resources/Muse-Spark-Open-816B-A42B-NVFP4, paramètres dans les métadonnées safetensors du dépôt officiel.", en: "Gated official repository: architecture read from the config.json republished in ml-resources/Muse-Spark-Open-816B-A42B-NVFP4, parameters from the official repository's safetensors metadata." }
+      - { fr: "Paramètres incluant les encodeurs vision et audio (~6 B, comptés en 16 bits). Couches globales sans RoPE.", en: "Parameters include the vision and audio encoders (~6 B, counted at 16 bits). Global layers use no RoPE." }
+      - { fr: "Licence Muse Model : au-delà de 20 M$ de chiffre d'affaires annuel, un service Model-as-a-Service requiert un accord avec Meta.", en: "Muse Model License: above USD 20M in annual revenue, a Model-as-a-Service business requires an agreement with Meta." }
+
   # ================================================================ Meta (Llama)
   - id: llama-4-maverick
     name: Llama 4 Maverick (400B-A17B)
@@ -1500,6 +1659,57 @@ models:
       - { fr: "Licence Llama 3.1.", en: "Llama 3.1 License." }
 
   # ================================================================ NVIDIA
+  - id: nemotron-3.5-super-vl
+    name: Nemotron 3.5 Super VL (120B-A12B)
+    family: NVIDIA
+    source: nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16
+    revision: fb0ee0bc6b3f70342afd8d84cb80dbadbaa8a1fe
+    paramsB: 124.45
+    activeParamsB: 12
+    expertParamsB: 112.7
+    hiddenSize: 4096
+    vocabSize: 131072
+    extraUnquantizedParamsB: 0.85
+    attentionHeads: 32
+    numLayers: 88
+    layers:
+      - { kind: linear, count: 40, ssmElements: 1048576, convElements: 30720, label: { fr: "Mamba-2 (état constant)", en: "Mamba-2 (constant state)" } }
+      - { kind: full, count: 8, kvHeads: 2, headDim: 128 }
+    maxContext: 1048576
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16, nvfp4]
+    checkpoints: { nvfp4: nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4 }
+    ssmStateBytes: 4
+    tags: [moe, hybrid, vision]
+    notes:
+      - { fr: "Même backbone que Nemotron 3 Super (Mamba-2 / Transformer, LatentMoE 512 experts) avec un encodeur vision C-RADIO. États SSM en FP32.", en: "Same backbone as Nemotron 3 Super (Mamba-2 / Transformer, LatentMoE with 512 experts) plus a C-RADIO vision encoder. SSM states in FP32." }
+      - { fr: "Licence OpenMDW 1.1.", en: "OpenMDW 1.1 License." }
+
+  - id: nemotron-3.5-bolt
+    name: Nemotron 3.5 Bolt (74B-A9B)
+    family: NVIDIA
+    source: nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-BF16
+    revision: e09a4cedb1787db1760375ee5539f222cae0c672
+    paramsB: 74.89
+    activeParamsB: 9
+    expertParamsB: 66.1
+    hiddenSize: 4096
+    vocabSize: 131072
+    extraUnquantizedParamsB: 0.85
+    attentionHeads: 32
+    numLayers: 88
+    layers:
+      - { kind: linear, count: 40, ssmElements: 1048576, convElements: 30720, label: { fr: "Mamba-2 (état constant)", en: "Mamba-2 (constant state)" } }
+      - { kind: full, count: 8, kvHeads: 2, headDim: 128 }
+    maxContext: 262144
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16]
+    ssmStateBytes: 4
+    tags: [moe, hybrid, vision]
+    notes:
+      - { fr: "Nemotron 3.5 Super élagué par recherche d'architecture (Puzzle) : experts réduits par couche, mêmes couches Mamba-2 et d'attention. États SSM en FP32.", en: "Nemotron 3.5 Super pruned by architecture search (Puzzle): fewer experts per layer, same Mamba-2 and attention layers. SSM states in FP32." }
+      - { fr: "Licence OpenMDW 1.1.", en: "OpenMDW 1.1 License." }
+
   - id: nemotron-3-super
     name: Nemotron 3 Super (124B-A12B)
     family: NVIDIA
@@ -1690,3 +1900,413 @@ models:
     officialWeightFormats: [bf16, int4]
     weightFormatNotes: *gemmaFp16
     tags: [vision, swa]
+
+  # ================================================================ MiniMax
+  - id: minimax-m3
+    name: MiniMax-M3 (428B-A23B)
+    family: MiniMax
+    source: MiniMaxAI/MiniMax-M3
+    revision: d95e30cb912fe3021bb9c2ba66a8ce60b6c937a9
+    paramsB: 427.04
+    activeParamsB: 23
+    expertParamsB: 412.9
+    hiddenSize: 6144
+    vocabSize: 200064
+    extraUnquantizedParamsB: 1
+    attentionHeads: 64
+    layers:
+      # MiniMax Sparse Attention: the 57 sparse layers keep the full GQA KV plus a 128-dim proxy key (BF16)
+      # used to pick 16 blocks of 128 tokens; the first 3 layers stay dense.
+      - { kind: full, count: 57, kvHeads: 4, headDim: 128, extraBytesPerToken: 256 }
+      - { kind: full, count: 3, kvHeads: 4, headDim: 128 }
+    maxContext: 1048576
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16, fp8]
+    checkpoints: { fp8: MiniMaxAI/MiniMax-M3-MXFP8 }
+    tags: [moe, vision, reasoning]
+    confidence: medium
+    notes:
+      - { fr: "L'attention parcimonieuse réduit le calcul, pas le KV stocké. Format des clés proxy en production non publié : BF16 supposé.", en: "Sparse attention cuts compute, not the stored KV. Production proxy key format not published: BF16 assumed." }
+      - { fr: "MiniMax-M3.1-Flash reprend la même architecture (checkpoint MXFP8). Licence MiniMax Community.", en: "MiniMax-M3.1-Flash uses the same architecture (MXFP8 checkpoint). MiniMax Community License." }
+
+  - id: minimax-m2.7
+    name: MiniMax-M2.7 (229B-A10B)
+    family: MiniMax
+    source: MiniMaxAI/MiniMax-M2.7
+    revision: 0a6536713b0b03f3be97494e5cf8d22f668a3164
+    paramsB: 228.69
+    activeParamsB: 10
+    expertParamsB: 224.6
+    hiddenSize: 3072
+    vocabSize: 200064
+    attentionHeads: 48
+    layers:
+      - { kind: full, count: 62, kvHeads: 8, headDim: 128 }
+    maxContext: 204800
+    nativeWeightFormat: fp8
+    officialWeightFormats: [fp8]
+    tags: [moe, reasoning, code]
+    notes:
+      - { fr: "Même architecture que MiniMax-M2, M2.1 et M2.5 (GQA complète sur 62 couches).", en: "Same architecture as MiniMax-M2, M2.1 and M2.5 (full GQA on 62 layers)." }
+
+  # ================================================================ Reflection AI
+  - id: beam-1.0
+    name: Beam 1.0 (501B-A23B)
+    family: Reflection AI
+    source: reflection/Beam-1.0-501B-A23B
+    revision: 24595dc986af66da3e40229d46aa5f6d1fd2d0c7
+    paramsB: 501.27
+    activeParamsB: 23
+    expertParamsB: 493.4
+    hiddenSize: 5120
+    vocabSize: 151936
+    attentionHeads: 48
+    layers:
+      - { kind: sliding, count: 43, kvHeads: 8, headDim: 128, window: 512 }
+      - { kind: full, count: 9, kvHeads: 8, headDim: 128 }
+    maxContext: 1048576
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16, fp8, nvfp4]
+    checkpoints: { fp8: reflection/Beam-1.0-501B-A23B-FP8, nvfp4: reflection/Beam-1.0-501B-A23B-NVFP4 }
+    tags: [moe, swa]
+    notes:
+      - { fr: "Fenêtre de 512 tokens sur 43 couches, couches globales sans RoPE. Licence Apache 2.0.", en: "512-token window on 43 layers, global layers without RoPE. Apache 2.0 License." }
+
+  # ================================================================ Aleph Alpha
+  - id: kolibri-1
+    name: Kolibri-1 (78B-A3.5B)
+    family: Aleph Alpha
+    source: Aleph-Alpha/Kolibri-1
+    revision: 5bb7075ba22db733e3834b1c71d2245537cc14ed
+    paramsB: 78.1
+    activeParamsB: 3.46
+    expertParamsB: 75.5
+    hiddenSize: 2560
+    vocabSize: 128000
+    attentionHeads: 48
+    layers:
+      - { kind: sliding, count: 40, kvHeads: 4, headDim: 128, window: 513 }
+      - { kind: full, count: 10, kvHeads: 4, headDim: 128 }
+    maxContext: 262144
+    maxContextExtended: 1048576
+    nativeWeightFormat: fp8
+    officialWeightFormats: [fp8, bf16]
+    checkpoints: { bf16: Aleph-Alpha/Kolibri-1-BF16 }
+    tags: [moe, swa]
+    notes:
+      - { fr: "Allemand et anglais. 1M tokens supportés, 256k recommandés par Aleph Alpha. Licence Apache 2.0.", en: "German and English. 1M tokens supported, 256k recommended by Aleph Alpha. Apache 2.0 License." }
+
+  # ================================================================ StepFun
+  - id: step-5-preview
+    name: Step 5 Preview (600B-A27B)
+    family: StepFun
+    source: stepfun-ai/Step-5-Preview
+    revision: 364b3b03fed2477aa0953fe855a2c4c8c48ee3cc
+    paramsB: 604.34
+    activeParamsB: 27
+    expertParamsB: 584.5
+    hiddenSize: 4096
+    vocabSize: 128896
+    extraUnquantizedParamsB: 38.6
+    attentionHeads: 64
+    layers:
+      - { kind: sliding, count: 69, kvHeads: 4, headDim: 192, window: 512 }
+      - { kind: full, count: 23, kvHeads: 4, headDim: 192 }
+    maxContext: 1048576
+    nativeWeightFormat: fp8
+    officialWeightFormats: [fp8, bf16, nvfp4]
+    checkpoints: { bf16: stepfun-ai/Step-5-Preview-BF16, nvfp4: stepfun-ai/Step-5-Preview-NVFP4 }
+    tags: [moe, swa, vision, reasoning]
+    notes:
+      - { fr: "Paramètres incluant l'encodeur vision et les 3 couches MTP. Les experts des couches 88 à 90 restent en BF16 dans le checkpoint FP8.", en: "Parameters include the vision encoder and the 3 MTP layers. Experts of layers 88 to 90 stay in BF16 in the FP8 checkpoint." }
+      - { fr: "Licence StepFun Model 1.0.", en: "StepFun Model License 1.0." }
+
+  - id: step-3.7-flash
+    name: Step 3.7 Flash (198B-A11B)
+    family: StepFun
+    source: stepfun-ai/Step-3.7-Flash
+    revision: 5f6244077ac62e04eec3f320501ff8c2b293373a
+    paramsB: 201.37
+    activeParamsB: 11
+    expertParamsB: 190.2
+    hiddenSize: 4096
+    vocabSize: 128896
+    extraUnquantizedParamsB: 1.8
+    attentionHeads: 64
+    layers:
+      # Sliding layers use 96 query heads, global layers 64; both have 8 KV heads.
+      - { kind: sliding, count: 33, kvHeads: 8, headDim: 128, window: 512 }
+      - { kind: full, count: 12, kvHeads: 8, headDim: 128 }
+    maxContext: 262144
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16, fp8, nvfp4]
+    checkpoints: { fp8: stepfun-ai/Step-3.7-Flash-FP8, nvfp4: stepfun-ai/Step-3.7-Flash-NVFP4 }
+    tags: [moe, swa, vision]
+    notes:
+      - { fr: "Backbone de 196 B + encodeur vision de 1,8 B ; paramètres incluant les 3 couches MTP. Licence Apache 2.0.", en: "196 B backbone + 1.8 B vision encoder; parameters include the 3 MTP layers. Apache 2.0 License." }
+
+  # ================================================================ Meituan (LongCat)
+  - id: longcat-2.0
+    name: LongCat-2.0 (1.6T-A48B)
+    family: Meituan (LongCat)
+    source: meituan-longcat/LongCat-2.0
+    revision: 834bf5ffe3047aa9f6cc7a64a9bc068b146b8274
+    paramsB: 1658
+    activeParamsB: 48
+    expertParamsB: 1468.8
+    hiddenSize: 8192
+    vocabSize: 163840
+    attentionHeads: 64
+    layers:
+      # 38 layers with two MLA blocks each; the sparse indexer runs once every 2 attention blocks.
+      - { kind: mla, count: 38, kvLoraRank: 512, ropeHeadDim: 64, extraBytesPerToken: 132 }
+      - { kind: mla, count: 38, kvLoraRank: 512, ropeHeadDim: 64 }
+    maxContext: 262144
+    maxContextExtended: 1048576
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16, fp8, int8]
+    checkpoints: { fp8: meituan-longcat/LongCat-2.0-FP8, int8: meituan-longcat/LongCat-2.0-INT8 }
+    tags: [moe, reasoning]
+    confidence: medium
+    notes:
+      - { fr: "Paramètres incluant 135 B d'embeddings N-gram ; le module MTP (3 couches, ~117 B) n'est pas compté. Meituan annonce 1,6 T.", en: "Parameters include 135 B of N-gram embeddings; the MTP module (3 layers, ~117 B) is not counted. Meituan advertises 1.6T." }
+      - { fr: "Entraîné sur des contextes de 1M tokens ; le config.json déclare 262 144 positions (YaRN ×120). Licence MIT.", en: "Trained on 1M-token contexts; config.json declares 262,144 positions (YaRN ×120). MIT License." }
+
+  - id: longcat-flash-chat
+    name: LongCat-Flash-Chat (560B-A27B)
+    family: Meituan (LongCat)
+    source: meituan-longcat/LongCat-Flash-Chat
+    revision: f0b8e8d7380330f450ca1fde4ec56823a514584c
+    paramsB: 561.86
+    activeParamsB: 27
+    expertParamsB: 541.2
+    hiddenSize: 6144
+    vocabSize: 131072
+    attentionHeads: 64
+    layers:
+      # 28 layers with two MLA blocks each.
+      - { kind: mla, count: 56, kvLoraRank: 512, ropeHeadDim: 64 }
+    maxContext: 131072
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16, fp8]
+    checkpoints: { fp8: meituan-longcat/LongCat-Flash-Chat-FP8 }
+    tags: [moe]
+    notes:
+      - { fr: "Experts « zéro » : 18,6 à 31,3 B de paramètres actifs selon le token (27 B en moyenne). Licence MIT.", en: "Zero-computation experts: 18.6 to 31.3 B active parameters depending on the token (27 B on average). MIT License." }
+
+  # ================================================================ inclusionAI (Ling)
+  - id: ling-3.1-flash
+    name: Ling-3.1-flash (560B-A25B)
+    family: inclusionAI (Ling)
+    source: inclusionAI/Ling-3.1-flash
+    revision: 276cca72bbd8b95693032848bfd638460b529b8b
+    paramsB: 572.12
+    activeParamsB: 25
+    expertParamsB: 547.6
+    hiddenSize: 4096
+    vocabSize: 157184
+    extraUnquantizedParamsB: 0.2
+    attentionHeads: 64
+    layers:
+      # One MLA layer every 8 layers, KDA (Kimi Delta Attention) elsewhere.
+      - { kind: linear, count: 63, ssmElements: 1048576, convElements: 73728, label: { fr: "KDA (état constant)", en: "KDA (constant state)" } }
+      - { kind: mla, count: 9, kvLoraRank: 512, ropeHeadDim: 64 }
+    maxContext: 262144
+    maxContextExtended: 1048576
+    nativeWeightFormat: fp8
+    officialWeightFormats: [fp8]
+    ssmStateBytes: 4
+    tags: [moe, hybrid, reasoning]
+    notes:
+      - { fr: "Paramètres incluant le module MTP (560 B annoncés). États KDA supposés en FP32. Licence MIT.", en: "Parameters include the MTP module (560 B advertised). KDA states assumed to be FP32. MIT License." }
+
+  - id: ring-2.6-1t
+    name: Ring-2.6-1T
+    family: inclusionAI (Ling)
+    source: inclusionAI/Ring-2.6-1T
+    revision: 2314abdf9e380b7fa7b4b79369ceb5f69cc46b32
+    paramsB: 1025.41
+    activeParamsB: 50
+    expertParamsB: 979.4
+    hiddenSize: 8192
+    vocabSize: 157184
+    extraUnquantizedParamsB: 13.3
+    attentionHeads: 64
+    layers:
+      # One MLA layer every 8 layers, Lightning Attention elsewhere.
+      - { kind: linear, count: 70, ssmElements: 1048576, label: { fr: "Lightning Attention (état constant)", en: "Lightning Attention (constant state)" } }
+      - { kind: mla, count: 10, kvLoraRank: 512, ropeHeadDim: 64 }
+    maxContext: 131072
+    nativeWeightFormat: fp8
+    officialWeightFormats: [fp8]
+    ssmStateBytes: 4
+    tags: [moe, hybrid, reasoning]
+    confidence: medium
+    notes:
+      - { fr: "Paramètres actifs estimés (~50 B) à partir des dimensions. États Lightning supposés en FP32. Paramètres incluant le module MTP. Licence MIT.", en: "Active parameters estimated (~50 B) from the dimensions. Lightning states assumed to be FP32. Parameters include the MTP module. MIT License." }
+
+  # ================================================================ Tencent (Hunyuan)
+  - id: hy4-preview
+    name: Hy4 Preview (770B-A49B)
+    family: Tencent (Hunyuan)
+    source: tencent/Hy4-preview
+    revision: 705d81ee51566a186d645b74c974d642ef2828fe
+    paramsB: 770
+    activeParamsB: 49
+    expertParamsB: 743.9
+    hiddenSize: 6144
+    vocabSize: 120832
+    attentionHeads: 64
+    layers:
+      # MLA + sparse indexer: 21 layers compute the index, the other 57 reuse it.
+      - { kind: mla, count: 21, kvLoraRank: 512, ropeHeadDim: 64, extraBytesPerToken: 132 }
+      - { kind: mla, count: 57, kvLoraRank: 512, ropeHeadDim: 64 }
+    maxContext: 1048576
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16, fp8]
+    checkpoints: { fp8: tencent/Hy4-preview-FP8 }
+    tags: [moe, reasoning]
+    notes:
+      - { fr: "Le module MTP (10 B) n'est pas compté. Licence Apache 2.0.", en: "The MTP module (10 B) is not counted. Apache 2.0 License." }
+
+  - id: hunyuan-a13b
+    name: Hunyuan-A13B (80B-A13B)
+    family: Tencent (Hunyuan)
+    source: tencent/Hunyuan-A13B-Instruct
+    revision: 290ddb9a56ed23c2c83a1c8081533e58925df952
+    paramsB: 80.39
+    activeParamsB: 13
+    expertParamsB: 77.3
+    hiddenSize: 4096
+    vocabSize: 128167
+    tiedEmbeddings: true
+    attentionHeads: 32
+    layers:
+      - { kind: full, count: 32, kvHeads: 8, headDim: 128 }
+    maxContext: 262144
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16, fp8, int4]
+    checkpoints: { fp8: tencent/Hunyuan-A13B-Instruct-FP8, int4: tencent/Hunyuan-A13B-Instruct-GPTQ-Int4 }
+    tags: [moe, reasoning]
+    notes:
+      - { fr: "256k tokens natifs ; le config.json limite à 32k par défaut. Licence Tencent Hunyuan A13B.", en: "256k tokens natively; config.json defaults to 32k. Tencent Hunyuan A13B License." }
+
+  # ================================================================ Baidu (ERNIE)
+  - id: ernie-4.5-300b-a47b
+    name: ERNIE-4.5-300B-A47B
+    family: Baidu (ERNIE)
+    source: baidu/ERNIE-4.5-300B-A47B-PT
+    revision: 47bbaf1c9e356313c3cb2ded9078a494fb152f0e
+    paramsB: 300.47
+    activeParamsB: 47
+    expertParamsB: 287.6
+    hiddenSize: 8192
+    vocabSize: 103424
+    attentionHeads: 64
+    layers:
+      - { kind: full, count: 54, kvHeads: 8, headDim: 128 }
+    maxContext: 131072
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16]
+    tags: [moe]
+    notes:
+      - { fr: "Checkpoints FP8 et 2 bits publiés uniquement au format PaddlePaddle. Licence Apache 2.0.", en: "FP8 and 2-bit checkpoints are published only in PaddlePaddle format. Apache 2.0 License." }
+
+  - id: ernie-4.5-21b-a3b
+    name: ERNIE-4.5-21B-A3B
+    family: Baidu (ERNIE)
+    source: baidu/ERNIE-4.5-21B-A3B-PT
+    revision: 87db95487941cb39592ee0abca3b9155a6d19c5c
+    paramsB: 21.95
+    activeParamsB: 3
+    expertParamsB: 20.4
+    hiddenSize: 2560
+    vocabSize: 103424
+    tiedEmbeddings: true
+    attentionHeads: 20
+    layers:
+      - { kind: full, count: 28, kvHeads: 4, headDim: 128 }
+    maxContext: 131072
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16]
+    tags: [moe]
+    notes:
+      - { fr: "Même architecture qu'ERNIE-4.5-21B-A3B-Thinking. Licence Apache 2.0.", en: "Same architecture as ERNIE-4.5-21B-A3B-Thinking. Apache 2.0 License." }
+
+  # ================================================================ Cohere
+  - id: command-a-plus
+    name: Command A+ (218B-A25B, 05-2026)
+    family: Cohere
+    source: CohereLabs/command-a-plus-05-2026-bf16
+    revision: 5fb6fde5fd12ff89356aae552e11883bc49f069b
+    paramsB: 218.75
+    activeParamsB: 25
+    expertParamsB: 206.2
+    hiddenSize: 4096
+    vocabSize: 262144
+    tiedEmbeddings: true
+    extraUnquantizedParamsB: 0.4
+    attentionHeads: 128
+    layers:
+      - { kind: sliding, count: 24, kvHeads: 8, headDim: 128, window: 4096 }
+      - { kind: full, count: 8, kvHeads: 8, headDim: 128 }
+    maxContext: 200000
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16, fp8]
+    checkpoints: { fp8: CohereLabs/command-a-plus-05-2026-fp8 }
+    tags: [moe, swa, vision, reasoning]
+    notes:
+      - { fr: "128k tokens en entrée + 64k en sortie selon Cohere. Licence Apache 2.0.", en: "128k input tokens + 64k output tokens according to Cohere. Apache 2.0 License." }
+
+  # ================================================================ IBM (Granite)
+  - id: granite-4.2-30b
+    name: Granite 4.2 30B
+    family: IBM (Granite)
+    source: ibm-granite/granite-4.2-30b
+    revision: 9e668ce1c538387ef24d3644e9b0606647762636
+    paramsB: 29.28
+    hiddenSize: 4096
+    vocabSize: 100352
+    attentionHeads: 32
+    layers:
+      - { kind: full, count: 64, kvHeads: 8, headDim: 128 }
+    maxContext: 131072
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16]
+    notes:
+      - { fr: "Licence Apache 2.0.", en: "Apache 2.0 License." }
+
+  - id: granite-4.2-8b
+    name: Granite 4.2 8B
+    family: IBM (Granite)
+    source: ibm-granite/granite-4.2-8b
+    revision: a7042144125ce5ae64f89610e8289647fc000b9a
+    paramsB: 8.79
+    hiddenSize: 4096
+    vocabSize: 100352
+    attentionHeads: 32
+    layers:
+      - { kind: full, count: 40, kvHeads: 8, headDim: 128 }
+    maxContext: 131072
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16]
+    notes:
+      - { fr: "Licence Apache 2.0.", en: "Apache 2.0 License." }
+
+  # ================================================================ Microsoft (Phi)
+  - id: phi-4
+    name: Phi-4 (14B)
+    family: Microsoft (Phi)
+    source: microsoft/phi-4
+    revision: 2db69c1c3e91a05d2c64a3185acfbaf36f744e25
+    paramsB: 14.66
+    hiddenSize: 5120
+    vocabSize: 100352
+    attentionHeads: 40
+    layers:
+      - { kind: full, count: 40, kvHeads: 10, headDim: 128 }
+    maxContext: 16384
+    nativeWeightFormat: bf16
+    officialWeightFormats: [bf16]
+    notes:
+      - { fr: "Licence MIT.", en: "MIT License." }

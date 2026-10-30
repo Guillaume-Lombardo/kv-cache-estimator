@@ -166,6 +166,18 @@ const layerGroupSchema = z.discriminatedUnion("kind", [
     convElements: z.number().int().nonnegative().default(0),
     label: text.optional(),
   }),
+  z.strictObject({
+    /** Compressed attention (DeepSeek V4 CSA/HCA): one shared K=V vector per stored entry. */
+    kind: z.literal("compressed"),
+    count: z.number().int().positive(),
+    headDim: z.number().int().positive(),
+    /** Context tokens pooled into one stored entry. Omitted: the layer keeps only its window (or reads another layer's entries). */
+    compressRatio: z.number().int().positive().optional(),
+    /** Most recent tokens kept uncompressed by every layer. */
+    window: z.number().int().positive(),
+    /** Additional bytes per compressed entry (sparse indexer keys), independent of the KV format. */
+    extraBytesPerEntry: z.number().nonnegative().optional(),
+  }),
 ]);
 export type LayerGroup = Localized<z.output<typeof layerGroupSchema>>;
 

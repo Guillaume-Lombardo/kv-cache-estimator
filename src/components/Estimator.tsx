@@ -764,6 +764,10 @@ const ASSUMPTIONS: Notice[] = [
     "MLA = layers × (latent rank + RoPE dim) × bytes × tokens (+ DSA indexer in FP8), without the factor of 2.",
   ),
   notice(
+    "Attention compressée (DeepSeek V4) = couches × dim × octets × (tokens / ratio + fenêtre), K = V, + indexeur par entrée compressée.",
+    "Compressed attention (DeepSeek V4) = layers × dim × bytes × (tokens / ratio + window), K = V, + indexer per compressed entry.",
+  ),
+  notice(
     "Couches linéaires (Mamba, DeltaNet, KDA) : état SSM + convolution fixes par requête, en FP32 si le modèle l'impose.",
     "Linear layers (Mamba, DeltaNet, KDA): fixed SSM + convolution state per request, in FP32 if the model requires it.",
   ),

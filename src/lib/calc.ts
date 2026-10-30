@@ -211,6 +211,10 @@ function groupLabel(g: LayerGroup, t: ReturnType<typeof tr>): string {
       return g.kvShared ? t("MLA (latent partagé)", "MLA (shared latent)") : t("MLA (latent compressé)", "MLA (compressed latent)");
     case "linear":
       return g.label ?? t("Linéaire / SSM (état constant)", "Linear / SSM (constant state)");
+    case "compressed":
+      return g.compressRatio
+        ? t(`Attention compressée (1/${g.compressRatio})`, `Compressed attention (1/${g.compressRatio})`)
+        : t("Fenêtre glissante seule", "Sliding window only");
   }
 }
 
@@ -221,7 +225,13 @@ export function windowLabel(window: number): string {
 /** Tokens retained by a sliding-window layer, depending on the engine. */
 export function storedTokens(g: LayerGroup, ctx: number, engine: EngineSpec): number {
   if (g.kind === "sliding" && slidingWindowSaves(engine)) return Math.min(ctx, g.window);
+  if (g.kind === "compressed") return compressedEntries(g, ctx) + Math.min(ctx, g.window);
   return ctx;
+}
+
+/** Compressed entries stored by a compressed-attention layer for ctx tokens. */
+export function compressedEntries(g: Extract<LayerGroup, { kind: "compressed" }>, ctx: number): number {
+  return g.compressRatio ? Math.ceil(ctx / g.compressRatio) : 0;
 }
 
 /** Shard a layer group's cache across GPUs in TP. */
@@ -234,7 +244,8 @@ function tpSharding(g: LayerGroup, tp: number): { perGpu: number; replication: n
       return { perGpu: headsPerGpu / g.kvHeads, replication: (headsPerGpu * tp) / g.kvHeads };
     }
     case "mla":
-      // The MLA latent has no head dimension: each TP rank keeps the whole cache.
+    case "compressed":
+      // The MLA latent (or single shared KV head) has no head dimension: each TP rank keeps the whole cache.
       return { perGpu: 1, replication: tp };
     case "linear":
       return { perGpu: 1 / tp, replication: 1 };
@@ -327,6 +338,19 @@ export function estimate(input: EstimateInput): Estimate {
         bytes = g.count * (g.ssmElements * m.ssmStateBytes + g.convElements * m.convStateBytes);
         constantBytes += bytes;
         detail = `${t("état", "state")} ${(g.ssmElements / 1e6).toFixed(2)} M × ${m.ssmStateBytes} ${B}${g.convElements ? ` + conv ${(g.convElements / 1e3).toFixed(0)} k × ${m.convStateBytes} ${B}` : ""}`;
+        break;
+      }
+      case "compressed": {
+        const perEntry = g.headDim * kvB + (g.extraBytesPerEntry ?? 0);
+        bytes = g.count * (compressedEntries(g, ctx) * perEntry + Math.min(ctx, g.window) * g.headDim * kvB);
+        if (g.compressRatio) perTokenBytes += (g.count * perEntry) / g.compressRatio;
+        detail = g.compressRatio
+          ? g.compressRatio > 1
+            ? t(`KV ${g.headDim} (K = V) pour ${g.compressRatio} tokens`, `KV ${g.headDim} (K = V) per ${g.compressRatio} tokens`)
+            : t(`KV ${g.headDim} (K = V) par token`, `KV ${g.headDim} (K = V) per token`)
+          : t(`KV ${g.headDim} (K = V)`, `KV ${g.headDim} (K = V)`);
+        if (g.extraBytesPerEntry) detail += t(` + ${g.extraBytesPerEntry} o/entrée (indexeur)`, ` + ${g.extraBytesPerEntry} B/entry (indexer)`);
+        detail += t(` · fenêtre ${windowLabel(g.window)}`, ` · ${windowLabel(g.window)} window`);
         break;
       }
     }
@@ -605,11 +629,30 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
         `${gibText(est.kv.constantBytes)} per request whatever the context (${m.ssmStateBytes * 8}-bit state), regardless of the selected KV format.`,
       ),
     });
-  if (m.layers.some((g) => (g.kind === "mla" || g.kind === "full") && (g.extraBytesPerToken ?? 0) > 0))
+  if (m.layers.some((g) => g.kind === "mla" && (g.extraBytesPerToken ?? 0) > 0))
     out.push({
       severity: "info",
       title: t("Index d'attention parcimonieuse (DSA) inclus", "Sparse attention index (DSA) included"),
       detail: t("Clés de l'indexeur stockées en FP8 + échelle, en plus du latent.", "Indexer keys stored in FP8 + scale, in addition to the latent."),
+    });
+  if (m.layers.some((g) => g.kind === "full" && (g.extraBytesPerToken ?? 0) > 0))
+    out.push({
+      severity: "info",
+      title: t("Index d'attention parcimonieuse inclus", "Sparse attention index included"),
+      detail: t(
+        "Clés de l'indexeur comptées à taille fixe par token, en plus du KV et quel que soit le format KV choisi.",
+        "Indexer keys counted at a fixed size per token, in addition to the KV and regardless of the selected KV format.",
+      ),
+    });
+  const compressed = m.layers.filter((g): g is Extract<LayerGroup, { kind: "compressed" }> => g.kind === "compressed");
+  if (compressed.length)
+    out.push({
+      severity: "info",
+      title: t("Attention compressée : une entrée KV pour plusieurs tokens", "Compressed attention: one KV entry for several tokens"),
+      detail: t(
+        `Chaque couche garde ses ${windowLabel(Math.max(...compressed.map((g) => g.window)))} récents non compressés ; les entrées compressées et l'indexeur suivent le contexte. L'état FP32 des compresseurs (quelques Mo par requête) n'est pas compté.`,
+        `Each layer keeps its most recent ${windowLabel(Math.max(...compressed.map((g) => g.window)))} uncompressed; compressed entries and the indexer grow with the context. The compressors' FP32 state (a few MB per request) is not counted.`,
+      ),
     });
 
   // --- Interconnect

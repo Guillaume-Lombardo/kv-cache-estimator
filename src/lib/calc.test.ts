@@ -116,6 +116,21 @@ describe("estimate", async () => {
     expect(b.kv.perRequestBytes - b.kv.constantBytes).toBe(2 * (a.kv.perRequestBytes - a.kv.constantBytes));
   });
 
+  it("attention compressée : DeepSeek-V4.1-Flash en NVFP4 = 890 o par token publiés, + fenêtre de 128 tokens", () => {
+    const ctx = 1048576;
+    const e = estimate(input(cfg, { model: "deepseek-v4.1-flash", gpu: "b200", kf: "nvfp4", contextTokens: ctx, gpuCount: 8 }));
+    const entry = 512 * 0.5625 + 68;
+    expect(e.kv.perTokenBytes).toBeCloseTo(890, 6);
+    expect(e.kv.perRequestBytes).toBe(3 * (ctx / 2) * entry + ctx * entry + 40 * 128 * 512 * 0.5625);
+    // A single shared K = V head: each TP rank keeps the whole cache, as with MLA.
+    expect(e.kv.perRequestClusterBytes).toBe(8 * e.kv.perRequestBytes);
+  });
+
+  it("attention compressée : DeepSeek-V4-Flash, entrées arrondies à l'entrée supérieure et fenêtre bornée par le contexte", () => {
+    const e = estimate(input(cfg, { model: "deepseek-v4-flash", kf: "fp8", contextTokens: 100 }));
+    expect(e.kv.perRequestBytes).toBe(43 * 100 * 512 + 21 * 25 * (512 + 68) + 20 * 1 * 512);
+  });
+
   it("TP au-delà du nombre de têtes KV : réplication signalée", () => {
     const i = input(cfg, { model: "qwen3-235b-2507", gpu: "h200", gpuCount: 8 });
     const e = estimate(i);

@@ -63,6 +63,25 @@ describe("convertHfConfig", async () => {
     ]);
   });
 
+  it("imports DeepSeek V4 compressed attention, including V4.1 shared compressed caches", () => {
+    const base = { hidden_size: 4096, num_hidden_layers: 4, num_attention_heads: 64, vocab_size: 129280, head_dim: 512, sliding_window: 128, index_head_dim: 128 };
+    // V4: every layer with a ratio compresses its own KV; ratio-4 layers carry the indexer. The fifth entry is an MTP layer.
+    const v4 = convertHfConfig({ ...base, compress_ratios: [0, 4, 128, 4, 0], expert_dtype: "fp4", quantization_config: { quant_method: "fp8" } }).model;
+    expect(v4.nativeWeightFormat).toBe("mxfp4");
+    expect(v4.layers).toEqual([
+      { kind: "compressed", count: 1, headDim: 512, window: 128 },
+      { kind: "compressed", count: 2, headDim: 512, compressRatio: 4, window: 128, extraBytesPerEntry: 68 },
+      { kind: "compressed", count: 1, headDim: 512, compressRatio: 128, window: 128 },
+    ]);
+    // V4.1: only kv_source_layer_ids store compressed entries; the others keep their window.
+    const v41 = convertHfConfig({ ...base, compress_ratios: [0, 2, 2, 1, 0], kv_source_layer_ids: [1, 3], index_source_layer_ids: [1, 2, 3] }).model;
+    expect(v41.layers).toEqual([
+      { kind: "compressed", count: 2, headDim: 512, window: 128 },
+      { kind: "compressed", count: 1, headDim: 512, compressRatio: 2, window: 128, extraBytesPerEntry: 68 },
+      { kind: "compressed", count: 1, headDim: 512, compressRatio: 1, window: 128, extraBytesPerEntry: 68 },
+    ]);
+  });
+
   it("recognizes ModelOpt mixed-precision NVFP4 checkpoints", () => {
     const json = JSON.parse(readFileSync(path.join(upstream, "mistralai__Mistral-Large-4-1T-A52B.json"), "utf8"));
     json.config.quantization_config = {
