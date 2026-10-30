@@ -4,7 +4,7 @@
 # Read at server startup (read again on every request in development).
 # Alternative path: KV_ESTIMATOR_CONFIG=/path/to/file.yaml (or .json)
 # Validation: pnpm run check-config
-# Add a model: pnpm run import-model path/config.json (see README)
+# Add a model: pnpm run import-model path/config.json or --hf org/name (see docs/catalogue.md)
 #
 # Units:
 #   - memoryGiB: driver-visible memory (nvidia-smi), in GiB (2^30 bytes)
