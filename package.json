@@ -1,6 +1,6 @@
 {
   "name": "kv-cache-estimator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Memory, throughput and sizing estimator for open-weight LLMs on NVIDIA and AMD GPUs",
   "scripts": {
