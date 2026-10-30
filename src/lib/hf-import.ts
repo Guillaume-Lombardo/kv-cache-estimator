@@ -83,13 +83,13 @@ function fromMistralParams(p: Json): Json {
   };
 }
 
-function detectNativeFormat(q: Json | undefined, dtype: unknown): { format: string; bits?: number } {
+function detectNativeFormat(q: Json | undefined, dtype: unknown): { format: string; bits?: number; nonExpertBits?: number } {
   if (q) {
     const method = String(q.quant_method ?? "").toLowerCase();
     const algo = String(q.quant_algo ?? "").toLowerCase();
     if (method === "mxfp4") return { format: "mxfp4" };
     // DeepSeek V4: FP4 experts (E8M0 scale per 32) dominate the weights, the rest is FP8.
-    if (String(q.expert_dtype ?? "").toLowerCase() === "fp4") return { format: "mxfp4" };
+    if (String(q.expert_dtype ?? "").toLowerCase() === "fp4") return { format: "mxfp4", ...(method === "fp8" ? { nonExpertBits: 8 } : {}) };
     if (algo.includes("nvfp4") || method === "nvfp4") return { format: "nvfp4" };
     // ModelOpt mixed precision (e.g. NVFP4 experts, FP8 elsewhere): the experts dominate the weights.
     if (algo === "mixed_precision" && JSON.stringify(q.quantized_layers ?? {}).includes("NVFP4")) return { format: "nvfp4" };
@@ -495,6 +495,7 @@ export function convertHfConfig(input: unknown, opts: ImportOptions = {}): Impor
     maxContext: maxPos,
     nativeWeightFormat: nativeFmt.format,
     ...(nativeFmt.bits ? { nativeBitsPerParam: nativeFmt.bits } : {}),
+    ...(nativeFmt.nonExpertBits ? { nativeNonExpertBitsPerParam: nativeFmt.nonExpertBits } : {}),
     officialWeightFormats: [nativeFmt.format],
     ...(ssmStateBytes !== 2 ? { ssmStateBytes } : {}),
     tags,

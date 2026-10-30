@@ -2007,18 +2007,20 @@ models:
     expertParamsB: 584.5
     hiddenSize: 4096
     vocabSize: 128896
-    extraUnquantizedParamsB: 38.6
+    extraUnquantizedParamsB: 18.63
     attentionHeads: 64
     layers:
       - { kind: sliding, count: 69, kvHeads: 4, headDim: 192, window: 512 }
       - { kind: full, count: 23, kvHeads: 4, headDim: 192 }
     maxContext: 1048576
     nativeWeightFormat: fp8
+    # FP8 experts, except the BF16 experts of layers 88 to 90 (19.9 B): (564.7 x 8 + 19.9 x 16) / 584.6.
+    nativeBitsPerParam: 8.27
     officialWeightFormats: [fp8, bf16, nvfp4]
     checkpoints: { bf16: stepfun-ai/Step-5-Preview-BF16, nvfp4: stepfun-ai/Step-5-Preview-NVFP4 }
     tags: [moe, swa, vision, reasoning]
     notes:
-      - { fr: "Paramètres incluant l'encodeur vision et les 3 couches MTP. Les experts des couches 88 à 90 restent en BF16 dans le checkpoint FP8.", en: "Parameters include the vision encoder and the 3 MTP layers. Experts of layers 88 to 90 stay in BF16 in the FP8 checkpoint." }
+      - { fr: "Checkpoint FP8 : seuls les experts sont en FP8, sauf ceux des couches 88 à 90 (BF16) ; attention, expert partagé et encodeur vision restent en BF16. Paramètres incluant l'encodeur vision et les 3 couches MTP.", en: "FP8 checkpoint: only the experts are FP8, except those of layers 88 to 90 (BF16); attention, shared expert and vision encoder stay in BF16. Parameters include the vision encoder and the 3 MTP layers." }
       - { fr: "Licence StepFun Model 1.0.", en: "StepFun Model License 1.0." }
 
   - id: step-3.7-flash
@@ -2125,12 +2127,11 @@ models:
     family: inclusionAI (Ling)
     source: inclusionAI/Ring-2.6-1T
     revision: 2314abdf9e380b7fa7b4b79369ceb5f69cc46b32
-    paramsB: 1025.41
+    paramsB: 1012.1
     activeParamsB: 50
     expertParamsB: 979.4
     hiddenSize: 8192
     vocabSize: 157184
-    extraUnquantizedParamsB: 13.3
     attentionHeads: 64
     layers:
       # One MLA layer every 8 layers, Lightning Attention elsewhere.
@@ -2143,7 +2144,7 @@ models:
     tags: [moe, hybrid, reasoning]
     confidence: medium
     notes:
-      - { fr: "Paramètres actifs estimés (~50 B) à partir des dimensions. États Lightning supposés en FP32. Paramètres incluant le module MTP. Licence MIT.", en: "Active parameters estimated (~50 B) from the dimensions. Lightning states assumed to be FP32. Parameters include the MTP module. MIT License." }
+      - { fr: "Paramètres actifs estimés (~50 B) à partir des dimensions. États Lightning supposés en FP32. Le module MTP (~13 B en BF16) n'est pas compté. Licence MIT.", en: "Active parameters estimated (~50 B) from the dimensions. Lightning states assumed to be FP32. The MTP module (~13 B in BF16) is not counted. MIT License." }
 
   # ================================================================ Tencent (Hunyuan)
   - id: hy4-preview

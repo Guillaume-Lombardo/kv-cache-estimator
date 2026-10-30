@@ -68,6 +68,7 @@ describe("convertHfConfig", async () => {
     // V4: every layer with a ratio compresses its own KV; ratio-4 layers carry the indexer. The fifth entry is an MTP layer.
     const v4 = convertHfConfig({ ...base, compress_ratios: [0, 4, 128, 4, 0], expert_dtype: "fp4", quantization_config: { quant_method: "fp8" } }).model;
     expect(v4.nativeWeightFormat).toBe("mxfp4");
+    expect(v4.nativeNonExpertBitsPerParam).toBe(8);
     expect(v4.layers).toEqual([
       { kind: "compressed", count: 1, headDim: 512, window: 128 },
       { kind: "compressed", count: 2, headDim: 512, compressRatio: 4, window: 128, extraBytesPerEntry: 68 },
