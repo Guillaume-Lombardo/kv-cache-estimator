@@ -9,7 +9,7 @@ What the estimator computes, the formulas behind each figure, and how engine pro
 | Model | Search by name, family or architecture keyword |
 | Context | Any length (`200k`, `1.5M`, `131072`), doubling presets from 8k to 1M, and the model's native and extended limits; extended and unsupported contexts are marked |
 | GPU | A family, then a variant. NVIDIA data center: V100, A100 (SXM 40 / 80 GB, PCIe 80 GB), H100 (SXM, NVL), H200 (SXM, NVL), GH200 (96 / 144 GB), B200 (HGX, GB200 NVL72), B300 (HGX, GB300 NVL72). AMD data center: MI300X, MI325X, MI355X. PCIe: L4, A10 / A10G, L40S, RTX PRO 6000, RTX 4090, RTX 5090 |
-| GPU count | 1 to 8, then 16, 32, 64; 72 for NVL72 domains |
+| GPU count | 1 to 8, then 16, 32, 64; 72 for NVL72 domains. 12, 24 and 48 appear only when usable (see [GPU counts](#gpu-counts)) |
 | Parallelism | TP/PP with selectable TP degree (PP = GPU count / TP), or DP-attention + EP for MoE |
 | Engine | vLLM / llm-d, SGLang or ZML / LLMD; both GPU and engine must support the format |
 | Formats | BF16, FP16, FP8, INT8, INT4, MXFP4, NVFP4 weights; BF16, FP16, FP8, NVFP4 KV |
@@ -18,6 +18,15 @@ What the estimator computes, the formulas behind each figure, and how engine pro
 | Workload | Average prompt and output tokens, request rate, TTFT and ITL targets, price per GPU-hour (Load and SLOs tab) |
 
 The URL stores the scenario settings for sharing. Models imported only into browser storage must also be available in the receiving browser.
+
+### GPU counts
+
+1 to 8 and the large sizes (`largeGpuCounts`, 72 only for NVL72 domains) are always offered. The intermediate sizes (`intermediateGpuCounts`, 12, 24 and 48 by default) appear only when both conditions hold:
+
+1. **Topology**: the count fills whole servers (a multiple of `maxGpusPerNode`) or fits in one scale-up domain (`nvlinkDomain`). 12, 24 and 48 on GB200 and GB300 NVL72 (trays of 4) and GH200 (4 per node); 24 and 48 on 8-GPU servers, HGX or PCIe.
+2. **Layout**: at least one layout the sizing tables would test, a valid TP degree that divides the count (within the scale-up domain or the server) with the rest in PP, or DP-attention + EP for a MoE, has no blocking parallelism error for the model and engine: TP or PP unsupported, heads not divisible, PP above the layer count, DP-attention unavailable or expert parameters unknown.
+
+Format, context and capacity errors do not hide a size: they do not depend on the layout, or they change with the context and the reserve, and a larger instance is often what makes the model fit. A link or a model, card or engine change that lands on a size no longer offered falls back to the default count (links) or to 8 (interface, with a notice). Inverse and workload sizing walk the same list, so they can recommend 12, 24 or 48.
 
 ## Results and limitations
 

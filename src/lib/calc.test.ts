@@ -328,9 +328,42 @@ describe("planning", async () => {
     expect(defaultTp(m, find(cfg.gpus, "gb200"), 64)).toBe(8);
     expect(defaultTp(m, find(cfg.gpus, "h100"), 6)).toBe(2);
   });
+  const counts = (gpu: string, model = "qwen3-32b", engine = find(cfg.engines, "vllm")) => gpuCountOptions(cfg, find(cfg.gpus, gpu), find(cfg.models, model), engine);
   it("72 GPUs offered only with NVL72", () => {
-    expect(gpuCountOptions(cfg, find(cfg.gpus, "gb200"))).toContain(72);
-    expect(gpuCountOptions(cfg, find(cfg.gpus, "h100"))).not.toContain(72);
+    expect(counts("gb200")).toContain(72);
+    expect(counts("h100")).not.toContain(72);
+  });
+  it("intermediate sizes follow the card's topology: whole servers or one interconnect domain", () => {
+    // NVL72 trays of 4 GPUs, one NVLink domain of 72.
+    expect(counts("gb200")).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 72]);
+    expect(counts("gb300")).toContain(12);
+    // GH200: 4 superchips per node.
+    expect(counts("gh200")).toEqual(expect.arrayContaining([12, 24, 48]));
+    // HGX 8-GPU servers: 12 would be one and a half servers.
+    for (const gpu of ["h100", "h200", "b200", "mi300x"]) {
+      expect(counts(gpu)).toEqual(expect.arrayContaining([24, 48]));
+      expect(counts(gpu)).not.toContain(12);
+    }
+    // PCIe cards, 8 per server.
+    expect(counts("l40s")).toEqual(expect.arrayContaining([24, 48]));
+    expect(counts("l40s")).not.toContain(12);
+  });
+  it("hides an intermediate size without a valid layout for the model and engine", () => {
+    const vllm = find(cfg.engines, "vllm");
+    const noPp = { ...vllm, features: { ...vllm.features, pipelineParallel: false as const } };
+    // Dense Qwen3-32B without PP: TP stays within the 8-GPU server on H100 and 64 heads rule out TP 12, 24 and 48 on GB200.
+    expect(counts("h100", "qwen3-32b", noPp)).not.toContain(24);
+    expect(counts("gb200", "qwen3-32b", noPp)).not.toContain(12);
+    expect(counts("gb200", "qwen3-32b", noPp)).not.toContain(24);
+    // Existing sizes are never filtered.
+    expect(counts("h100", "qwen3-32b", noPp)).toContain(16);
+    // A MoE model keeps the size through DP-attention + EP.
+    expect(counts("h100", "kimi-k2-instruct", noPp)).toContain(24);
+    expect(counts("h100", "kimi-k2-instruct", { ...noPp, features: { ...noPp.features, dpAttention: false as const } })).not.toContain(24);
+  });
+  it("catalogues without intermediate sizes keep the previous list", () => {
+    const old = { ...cfg, intermediateGpuCounts: [] };
+    expect(gpuCountOptions(old, find(cfg.gpus, "gb200"), find(cfg.models, "qwen3-32b"), find(cfg.engines, "vllm"))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 16, 32, 64, 72]);
   });
   it("inverse sizing: reaches the target with the fewest GPUs", () => {
     const base = input(cfg, { model: "llama-3.3-70b", contextTokens: 131072 });
@@ -338,6 +371,16 @@ describe("planning", async () => {
     const h200 = rows.find((r) => r.gpu.id === "h200")!;
     expect(h200.gpuCount).not.toBeNull();
     expect(h200.sessions).toBeGreaterThanOrEqual(16);
+  });
+  it("inverse sizing can land on an intermediate size", () => {
+    const base = input(cfg, { model: "llama-3.1-405b", contextTokens: 131072 });
+    const rows = sizeForTarget(cfg, { ...base, weightFormatId: "bf16", kvFormatId: "bf16" }, 8);
+    // BF16 Llama 3.1 405B needs more than 16 H100s for 8 sessions of 128k: three servers are enough.
+    const h100 = rows.find((r) => r.gpu.id === "h100")!;
+    expect(h100.gpuCount).toBe(24);
+    expect(h100.sessions).toBeGreaterThanOrEqual(8);
+    // Never a size the card does not offer.
+    for (const r of rows) if (r.gpuCount !== null) expect(gpuCountOptions(cfg, r.gpu, base.model, base.engine)).toContain(r.gpuCount);
   });
   it("maximum context for N sessions", () => {
     const i = input(cfg, { gpuCount: 2 });

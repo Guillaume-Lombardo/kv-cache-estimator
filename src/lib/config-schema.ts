@@ -339,6 +339,11 @@ export const configSchema = z
       .default({ memoryEfficiency: 0.7, computeEfficiency: 0.45, collectiveLatencyUs: { nvlink: 8, pcie: 30, network: 40 }, networkGBsPerGpu: 50 }),
     /** GPU counts offered above 8. */
     largeGpuCounts: z.array(z.number().int().min(9)).default([16, 32, 64, 72]),
+    /**
+     * GPU counts above 8 offered only when usable: whole servers or one interconnect domain on the card,
+     * and at least one valid parallel layout for the model and engine. Optional for older catalogues.
+     */
+    intermediateGpuCounts: z.array(z.number().int().min(9)).default([12, 24, 48]),
     weightFormats: z.array(weightFormatSchema).min(1),
     kvCacheFormats: z.array(kvFormatSchema).min(1),
     engines: z.array(engineSchema).min(1),

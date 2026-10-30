@@ -151,6 +151,15 @@ describe("workload", async () => {
     }
     expect(rows.findIndex((r) => r.gpus === null)).not.toBe(0);
   });
+
+  it("can size an instance with an intermediate GPU count", () => {
+    const input = inputFor({ model: "llama-3.1-405b", gpu: "h100", ctx: "32768", n: "8" });
+    const rows = sizeForWorkload(cfg, { ...input, weightFormatId: input.weightFormat.id, kvFormatId: input.kvFormat.id }, { ...w, requestsPerSec: 4 }, "h100");
+    // BF16 Llama 3.1 405B: 16 H100s leave too little KV memory for this load, 24 (three servers) serve it in one instance.
+    const h100 = rows.find((r) => r.gpu.id === "h100")!;
+    expect(h100.gpuCount).toBe(24);
+    expect(h100.itlMs!).toBeLessThanOrEqual(w.itlMs);
+  });
 });
 
 describe("scenario URL and report", async () => {
@@ -161,6 +170,16 @@ describe("scenario URL and report", async () => {
     const back = scenarioFromQuery(cfg, cfg.models, Object.fromEntries(new URLSearchParams(scenarioToQuery(s))));
     expect(back).toEqual(s);
     expect(s.workload).toEqual({ inputTokens: 1500, outputTokens: 300, requestsPerSec: 3.5, ttftSeconds: 1, itlMs: 40 });
+  });
+  it("accepts an intermediate GPU count in the URL only where it is offered", () => {
+    expect(scenarioFromQuery(cfg, cfg.models, { model: "qwen3-32b", gpu: "gb200", n: "12" }).gpuCount).toBe(12);
+    expect(scenarioFromQuery(cfg, cfg.models, { model: "qwen3-32b", gpu: "h100", n: "24" }).gpuCount).toBe(24);
+    // 12 H100s would be one and a half HGX servers: back to the catalogue default, with a TP degree that divides it.
+    const s = scenarioFromQuery(cfg, cfg.models, { model: "qwen3-32b", gpu: "h100", n: "12", tp: "4" });
+    expect(s.gpuCount).toBe(cfg.defaults.gpuCount);
+    expect(s.gpuCount % s.tp).toBe(0);
+    const back = scenarioFromQuery(cfg, cfg.models, Object.fromEntries(new URLSearchParams(scenarioToQuery(scenarioFromQuery(cfg, cfg.models, { gpu: "gb200", n: "12" })))));
+    expect(back.gpuCount).toBe(12);
   });
   it("gives every issue a stable code", () => {
     const input = resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "kimi-k2-instruct", gpu: "l40s", n: "8", tp: "8" }), "en")!;
