@@ -9,6 +9,7 @@ import type { GpuSpec, PerformanceSettings, WeightFormat } from "./config-schema
 
 export interface DecodePoint {
   batch: number;
+  /** Decoding step time = inter-token latency (ITL). */
   stepMs: number;
   tokPerSecPerSession: number;
   tokPerSecTotal: number;
@@ -23,8 +24,13 @@ export interface PerfEstimate {
   /** Full-context prefill for one request, in seconds. */
   prefillSeconds: number;
   computeLabel: string;
-  /** Operating point for an arbitrary number of active sessions. */
-  at: (batch: number) => DecodePoint;
+  /** Effective compute throughput of the whole instance (all GPUs), in FLOP/s. */
+  instanceFlopsPerSec: number;
+  /**
+   * Operating point for an arbitrary number of active sessions. prefillUtil is the fraction of the
+   * instance's compute taken by concurrent (chunked) prefills: it slows compute-bound steps by 1 / (1 - u).
+   */
+  at: (batch: number, prefillUtil?: number) => DecodePoint;
 }
 
 /** Tensor-core throughput for the weight format (emulated FP4 uses BF16). */
@@ -57,8 +63,8 @@ function decodeFlopsPerToken(input: EstimateInput): number {
 }
 
 /** Prefill FLOPs for a request of ctx tokens (causal attention). */
-function prefillFlops(input: EstimateInput): number {
-  const { model: m, contextTokens: ctx, engine } = input;
+export function prefillFlops(input: EstimateInput, ctx = input.contextTokens): number {
+  const { model: m, engine } = input;
   const active = (m.activeParamsB ?? m.paramsB) * 1e9;
   let attn = 0;
   for (const g of m.layers) {
@@ -99,7 +105,8 @@ export function estimatePerf(input: EstimateInput, est: Estimate, perf: Performa
   const flopsTok = decodeFlopsPerToken(input);
   const layers = m.layers.reduce((s, g) => s + g.count, 0);
 
-  const point = (batch: number): DecodePoint => {
+  const point = (batch: number, prefillUtil = 0): DecodePoint => {
+    const slow = 1 / Math.max(1e-6, 1 - prefillUtil);
     let stepS: number;
     let memS: number;
     let compS: number;
@@ -108,7 +115,7 @@ export function estimatePerf(input: EstimateInput, est: Estimate, perf: Performa
       const shared = est.weights.nonExpertBytes;
       memS = (shared + weightsRead(W - shared, batch) / n + perGpuSeqs * est.kv.perRequestPerGpuBytes) / bytesPerSec;
       compS = (batch * flopsTok) / n / flopsPerSec;
-      stepS = Math.max(memS, compS) + (2 * layers * collectiveLatencyUs(gpu, n, perf)) / 1e6;
+      stepS = Math.max(memS, compS * slow) + (2 * layers * collectiveLatencyUs(gpu, n, perf)) / 1e6;
     } else {
       const { tp, pp } = est;
       const micro = Math.ceil(batch / pp);
@@ -116,23 +123,27 @@ export function estimatePerf(input: EstimateInput, est: Estimate, perf: Performa
       compS = (micro * flopsTok) / n / flopsPerSec;
       const comm = (2 * (layers / pp) * collectiveLatencyUs(gpu, tp, perf) + (pp > 1 ? collectiveLatencyUs(gpu, n, perf) : 0)) / 1e6;
       // Each decoding step traverses pp stages; each stage handles pp microbatches.
-      stepS = pp * (Math.max(memS, compS) + comm);
+      stepS = pp * (Math.max(memS, compS * slow) + comm);
     }
     return {
       batch,
       stepMs: stepS * 1000,
       tokPerSecPerSession: 1 / stepS,
       tokPerSecTotal: batch / stepS,
-      bound: memS >= compS ? "memory" : "compute",
+      bound: memS >= compS * slow ? "memory" : "compute",
     };
   };
 
-  const prefillSeconds = prefillFlops(input) / (n * flopsPerSec);
+  // One request's prefill runs on the GPUs of one stage (TP); PP stages run one after the other.
+  // DP-attention + EP: the experts, which dominate the FLOPs, are spread over every GPU.
+  const prefillGpus = mode === "dp-ep" ? n : est.tp;
+  const prefillSeconds = prefillFlops(input) / (prefillGpus * flopsPerSec);
   return {
     single: point(1),
     full: est.sessions >= 1 ? point(est.sessions) : null,
     prefillSeconds,
     computeLabel: label,
+    instanceFlopsPerSec: n * flopsPerSec,
     at: point,
   };
 }

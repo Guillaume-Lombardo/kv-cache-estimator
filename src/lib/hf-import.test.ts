@@ -28,7 +28,7 @@ describe("convertHfConfig", async () => {
     expect(model.paramsB).toBeLessThan(ref.paramsB * 1.05);
   });
 
-  it("estime les paramètres d'un config.json brut (Qwen3-8B ≈ 8,19 B)", () => {
+  it("estimates parameters from a raw config.json (Qwen3-8B ≈ 8.19 B)", () => {
     const json = JSON.parse(readFileSync(path.join(upstream, "Qwen__Qwen3-8B.json"), "utf8"));
     const { model, paramsSource } = convertHfConfig(json.config, { source: "Qwen/Qwen3-8B" });
     expect(paramsSource).toBe("estimate");
@@ -99,7 +99,7 @@ describe("convertHfConfig", async () => {
     expect(convertHfConfig(json).model.nativeWeightFormat).toBe("nvfp4");
   });
 
-  it("produit un YAML relisible sous models:", () => {
+  it("produces YAML that parses back under models:", () => {
     const json = JSON.parse(readFileSync(path.join(upstream, "google__gemma-4-31B.json"), "utf8"));
     const yaml = modelToYaml(convertHfConfig(json).model);
     expect(yaml).toMatch(/^ {2}- id: gemma-4-31b/);

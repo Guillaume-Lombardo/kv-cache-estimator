@@ -46,9 +46,22 @@ const kvFormatSchema = z.strictObject({
   description: text.optional(),
 });
 
+/** Card groups offered by the GPU picker. */
+export const GPU_SEGMENTS = ["datacenter", "pcie"] as const;
+export type GpuSegment = (typeof GPU_SEGMENTS)[number];
+
 const gpuSchema = z.strictObject({
   id: z.string(),
   name: text,
+  /** Product family shown in the picker (e.g. "H100"); variants of one family share it. Defaults to the name. */
+  family: z.string().optional(),
+  /** Variant label within the family (e.g. "SXM 80 GB"). */
+  variant: text.optional(),
+  /** datacenter: HBM with a GPU-to-GPU fabric; pcie: PCIe / GDDR cards (inference servers, workstations). */
+  segment: z.enum(GPU_SEGMENTS).default("datacenter"),
+  vendor: z.enum(["nvidia", "amd"]).default("nvidia"),
+  /** Indicative on-demand price per GPU-hour, in USD (cost estimates only). */
+  priceUsdPerHour: z.number().positive().optional(),
   architecture: z.string(),
   computeCapability: z.string(),
   /** Driver-visible memory, in GiB. */
@@ -64,13 +77,16 @@ const gpuSchema = z.strictObject({
   }),
   interconnect: z.strictObject({
     label: text,
+    /** GPU-to-GPU scale-up fabric (NVLink, Infinity Fabric). */
     nvlink: z.boolean(),
+    /** Fabric name used in messages. */
+    fabric: z.string().default("NVLink"),
     /** GPU-to-GPU bandwidth per GPU, in GB/s. */
     bandwidthGBs: z.number().positive(),
   }),
   /** GPUs within one server. */
   maxGpusPerNode: z.number().int().positive(),
-  /** GPUs reachable through NVLink (1 means no NVLink). */
+  /** GPUs reachable through the scale-up fabric (1 means none). */
   nvlinkDomain: z.number().int().positive(),
   /** Attached CPU memory (e.g. Grace LPDDR5X) per GPU, in GiB. 0 requires user input. */
   hostMemoryGiBPerGpu: z.number().nonnegative().default(0),
@@ -118,9 +134,65 @@ const engineSchema = z.strictObject({
   /** Per-GPU restrictions (omitted means unrestricted). */
   gpus: z.record(z.string(), supportSchema).default({}),
   notes: z.array(text).default([]),
+  /** How the engine sizes its KV pool. */
+  memory: z
+    .strictObject({
+      /**
+       * true: the memory fraction (1 - reserve) also covers the activation peak and runtime overhead (vLLM
+       * --gpu-memory-utilization). false: it covers weights and KV only; the overhead must fit in the reserve
+       * (SGLang --mem-fraction-static).
+       */
+      overheadInBudget: z.boolean().default(true),
+      /** Fixed runtime memory per GPU outside activations (non-PyTorch allocations, communication buffers), in GiB. */
+      fixedOverheadGiB: z.number().nonnegative().default(0.5),
+      /** CUDA graph memory per GPU, in GiB (counted where overheadInBudget puts the overhead). */
+      cudaGraphGiB: z.number().nonnegative().default(0),
+    })
+    .default({ overheadInBudget: true, fixedOverheadGiB: 0.5, cudaGraphGiB: 0 }),
+  /** Scheduler defaults that size the activation peak and cap concurrency. */
+  runtime: z
+    .strictObject({
+      /** Tokens per scheduling step (chunked prefill budget). */
+      maxNumBatchedTokens: z.number().int().positive().default(8192),
+      /** Maximum concurrent sequences per instance (per DP rank in DP-attention). */
+      maxNumSeqs: z.number().int().positive().default(256),
+      /** Defaults that depend on GPU memory: the first tier whose minimum is reached applies (top-down). */
+      byMemory: z
+        .array(
+          z.strictObject({
+            minMemoryGiB: z.number().nonnegative(),
+            maxNumBatchedTokens: z.number().int().positive(),
+            maxNumSeqs: z.number().int().positive(),
+            /** GPU ids excluded from this tier (vLLM keeps A100s on the small defaults). */
+            exceptGpus: z.array(z.string()).default([]),
+          }),
+        )
+        .default([]),
+    })
+    .default({ maxNumBatchedTokens: 8192, maxNumSeqs: 256, byMemory: [] }),
+  /** Format support that differs by GPU vendor in this engine (e.g. no AWQ/GPTQ on ROCm). Combined like the other maps. */
+  vendorFormats: z
+    .partialRecord(
+      z.enum(["nvidia", "amd"]),
+      z.strictObject({
+        weightFormats: z.record(z.string(), supportSchema).default({}),
+        kvCacheFormats: z.record(z.string(), supportSchema).default({}),
+      }),
+    )
+    .default({}),
   /** Indicative command-line options. */
   flags: z
     .strictObject({
+      /** Command that starts the server, followed by the checkpoint. */
+      launch: z.string().optional(),
+      /** Context length option. */
+      maxModelLen: z.string().optional(),
+      maxNumBatchedTokens: z.string().optional(),
+      maxNumSeqs: z.string().optional(),
+      /** Recurrent state dtype option, used when the model requires FP32 states. */
+      mambaSsmCacheDtype: z.string().optional(),
+      /** CLI value per KV format id (defaults: fp8 → fp8, nvfp4 → nvfp4, others → auto). */
+      kvCacheDtypeValues: z.record(z.string(), z.string()).default({}),
       memoryUtilization: z.string().optional(),
       kvCacheDtype: z.string().optional(),
       tensorParallel: z.string().optional(),
@@ -128,7 +200,7 @@ const engineSchema = z.strictObject({
       dpAttention: z.string().optional(),
       kvOffload: text.optional(),
     })
-    .default({}),
+    .default({ kvCacheDtypeValues: {} }),
 });
 
 const gqaFields = {
@@ -241,6 +313,16 @@ export const configSchema = z
         contextTokens: z.number().int().positive().optional(),
         kvCacheFormat: z.string().optional(),
         reservePct: z.number().min(0).max(50).optional(),
+        /** Default workload for the load and SLO analysis. */
+        workload: z
+          .strictObject({
+            inputTokens: z.number().int().positive().default(2000),
+            outputTokens: z.number().int().positive().default(500),
+            requestsPerSec: z.number().positive().default(2),
+            ttftSeconds: z.number().positive().default(2),
+            itlMs: z.number().positive().default(50),
+          })
+          .optional(),
       })
       .default({}),
     performance: z
@@ -251,8 +333,10 @@ export const configSchema = z
         computeEfficiency: z.number().min(0.05).max(1).default(0.45),
         /** Latency of a decoding all-reduce / all-to-all, in microseconds. */
         collectiveLatencyUs: z.strictObject({ nvlink: z.number().positive(), pcie: z.number().positive(), network: z.number().positive() }).default({ nvlink: 8, pcie: 30, network: 40 }),
+        /** Scale-out network bandwidth per GPU (one NIC per GPU), in GB/s: KV transfers between prefill and decode pools. */
+        networkGBsPerGpu: z.number().positive().default(50),
       })
-      .default({ memoryEfficiency: 0.7, computeEfficiency: 0.45, collectiveLatencyUs: { nvlink: 8, pcie: 30, network: 40 } }),
+      .default({ memoryEfficiency: 0.7, computeEfficiency: 0.45, collectiveLatencyUs: { nvlink: 8, pcie: 30, network: 40 }, networkGBsPerGpu: 50 }),
     /** GPU counts offered above 8. */
     largeGpuCounts: z.array(z.number().int().min(9)).default([16, 32, 64, 72]),
     weightFormats: z.array(weightFormatSchema).min(1),
@@ -295,6 +379,12 @@ export const configSchema = z
       checkFormats(e.weightFormats, wf, ["engines", i, "weightFormats"], "format de poids");
       checkFormats(e.kvCacheFormats, kf, ["engines", i, "kvCacheFormats"], "format KV");
       checkFormats(e.gpus, gpuIds, ["engines", i, "gpus"], "GPU");
+      for (const [v, m] of Object.entries(e.vendorFormats)) {
+        checkFormats(m.weightFormats, wf, ["engines", i, "vendorFormats", v, "weightFormats"], "format de poids");
+        checkFormats(m.kvCacheFormats, kf, ["engines", i, "vendorFormats", v, "kvCacheFormats"], "format KV");
+      }
+      for (const [k, tier] of e.runtime.byMemory.entries())
+        checkFormats(Object.fromEntries(tier.exceptGpus.map((g) => [g, 1])), gpuIds, ["engines", i, "runtime", "byMemory", k, "exceptGpus"], "GPU");
     });
     cfg.models.forEach((m, i) => {
       if (!wf.has(m.nativeWeightFormat))

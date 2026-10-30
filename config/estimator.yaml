@@ -16,7 +16,8 @@ defaults:
   model: qwen3-32b
   gpu: h100
   engine: vllm
-  gpuCount: 1
+  # Qwen3-32B in BF16 on one H100 leaves less than one 32k request once activations and CUDA graphs are counted.
+  gpuCount: 2
   contextTokens: 32768
   kvCacheFormat: bf16
   reservePct: 10 # ≈ vLLM --gpu-memory-utilization 0.90
@@ -77,6 +78,8 @@ engines:
       kvOffload: { fr: "Connecteur d'offload CPU natif ou LMCache.", en: "Native CPU offload connector or LMCache." }
     sources:
       - { label: { fr: "Documentation vLLM", en: "vLLM documentation" }, url: "https://docs.vllm.ai/" }
+      - { label: { fr: "Calcul de la mémoire KV (gpu_worker.py, v0.32.0)", en: "KV memory sizing (gpu_worker.py, v0.32.0)" }, url: "https://github.com/vllm-project/vllm/blob/v0.32.0/vllm/v1/worker/gpu_worker.py" }
+      - { label: { fr: "Valeurs par défaut (arg_utils.py, v0.32.0)", en: "Defaults (arg_utils.py, v0.32.0)" }, url: "https://github.com/vllm-project/vllm/blob/v0.32.0/vllm/engine/arg_utils.py" }
     weightFormats:
       bf16: native
       fp16: native
@@ -91,12 +94,40 @@ engines:
       fp8: { level: native, note: { fr: "--kv-cache-dtype fp8 (e4m3) ; échelles calibrées recommandées.", en: "--kv-cache-dtype fp8 (e4m3); calibrated scales recommended." } }
       nvfp4: { level: limited, note: { fr: "KV NVFP4 expérimental ou absent selon la version de vLLM.", en: "NVFP4 KV experimental or missing depending on the vLLM version." } }
     gpus:
-      v100: { level: limited, note: { fr: "Volta (sm70) : pas de FlashAttention, de FP8 ni de Marlin. Support non garanti dans vLLM V1 récent.", en: "Volta (sm70): no FlashAttention, FP8 or Marlin. Support not guaranteed in recent vLLM V1." } }
+      v100: { level: limited, note: { fr: "Volta (sm70) : pas de FlashAttention, de FP8 ni de Marlin. vLLM documente désormais un minimum sm75 : support non garanti.", en: "Volta (sm70): no FlashAttention, FP8 or Marlin. vLLM now documents an sm75 minimum: support not guaranteed." } }
     notes:
       - { fr: "Blocs KV de 16 tokens (arrondi négligeable). Prefix caching non compté.", en: "16-token KV blocks (negligible rounding). Prefix caching not counted." }
       - { fr: "États récurrents (Mamba, DeltaNet, KDA) : type piloté par --mamba-ssm-cache-dtype ou par le config.json du modèle.", en: "Recurrent states (Mamba, DeltaNet, KDA): type set by --mamba-ssm-cache-dtype or by the model's config.json." }
       - { fr: "llm-d : désagrégation prefill/decode et routage KV-aware entre instances vLLM ; le dimensionnement par instance est identique.", en: "llm-d: prefill/decode disaggregation and KV-aware routing across vLLM instances; per-instance sizing is the same." }
+    # KV pool = utilization × total memory − weights − non-PyTorch memory − profiled activation peak − CUDA graphs
+    # (gpu_worker.py determine_available_memory; CUDA graph profiling on by default since v0.21.0).
+    # The fixed amounts are orders of magnitude: the startup log prints the measured values
+    # ("Actual usage is … for consumed memory, … for peak activation, and … for CUDAGraph memory").
+    memory: { overheadInBudget: true, fixedOverheadGiB: 0.5, cudaGraphGiB: 1.0 }
+    # vllm serve defaults (arg_utils.py get_batch_defaults, v0.32.0): ≥ 160 GiB → 16384 tokens / 1024 seqs;
+    # ≥ 70 GiB except A100 → 8192 / 1024; otherwise 2048 / 256.
+    runtime:
+      maxNumBatchedTokens: 2048
+      maxNumSeqs: 256
+      byMemory:
+        - { minMemoryGiB: 160, maxNumBatchedTokens: 16384, maxNumSeqs: 1024 }
+        - { minMemoryGiB: 70, maxNumBatchedTokens: 8192, maxNumSeqs: 1024, exceptGpus: [a100-80, a100-pcie-80] }
+    # ROCm (quantization matrix, docs.vllm.ai/en/latest/features/quantization/).
+    vendorFormats:
+      amd:
+        weightFormats:
+          int8: { level: unsupported, note: { fr: "W8A8 INT8 absent de la matrice ROCm de vLLM.", en: "W8A8 INT8 missing from vLLM's ROCm matrix." } }
+          int4: { level: unsupported, note: { fr: "AWQ / GPTQ non supportés sur GPU AMD dans vLLM (pas de Marlin sous ROCm).", en: "AWQ / GPTQ not supported on AMD GPUs in vLLM (no Marlin on ROCm)." } }
+          nvfp4: { level: unverified, note: { fr: "Émulation générique seulement ; chemin ROCm non vérifié.", en: "Generic emulation only; ROCm path not verified." } }
+        kvCacheFormats:
+          fp8: { level: native, note: { fr: "ROCm : fp8 = e4m3 uniquement.", en: "ROCm: fp8 = e4m3 only." } }
+          nvfp4: { level: unsupported, note: { fr: "Pas de KV NVFP4 dans le backend d'attention ROCm.", en: "No NVFP4 KV in the ROCm attention backend." } }
     flags:
+      launch: vllm serve
+      maxModelLen: --max-model-len
+      maxNumBatchedTokens: --max-num-batched-tokens
+      maxNumSeqs: --max-num-seqs
+      mambaSsmCacheDtype: --mamba-ssm-cache-dtype
       memoryUtilization: --gpu-memory-utilization
       kvCacheDtype: --kv-cache-dtype
       tensorParallel: --tensor-parallel-size
@@ -156,6 +187,9 @@ engines:
       nvfp4: { level: unsupported, note: { fr: "Pas de KV FP4 pour l'attention standard dans la bibliothèque ZML @3500e88 (cache compressé FP4 seulement pour la MLA parcimonieuse sur Blackwell).", en: "No FP4 KV for standard attention in the ZML library @3500e88 (FP4 compressed cache only for sparse MLA on Blackwell)." } }
     gpus:
       v100: { level: unverified, note: { fr: "Aucune vérification sm70 dans la bibliothèque (FA3 réservé à sm90, FA2 sans minimum déclaré).", en: "No sm70 check in the library (FA3 restricted to sm90, FA2 with no declared minimum)." } }
+      mi300x: &zmlRocm { level: unverified, note: { fr: "ROCm annoncé par la page LLMD ; ce profil décrit le backend CUDA.", en: "ROCm advertised on the LLMD page; this profile describes the CUDA backend." } }
+      mi325x: *zmlRocm
+      mi355x: *zmlRocm
     notes:
       - { fr: "Capacités serveur selon la documentation LLMD ; formats, précision du KV et fenêtres glissantes selon le code de la bibliothèque ZML @3500e88, backend CUDA. Le code de LLMD n'est pas public : une version plus récente peut différer.", en: "Server capabilities from the LLMD documentation; formats, KV precision and sliding windows from the ZML library code @3500e88, CUDA backend. LLMD's code is not public: a newer version may differ." }
       - { fr: "États récurrents (Gated DeltaNet) en FP32 dans la bibliothèque, préalloués.", en: "Recurrent states (Gated DeltaNet) in FP32 in the library, preallocated." }
@@ -165,6 +199,86 @@ engines:
       - { fr: "Décodage spéculatif DFlash natif pour Gemma 4 (Qwen prévu) : non modélisé ici (réduit la latence, ajoute un modèle brouillon en mémoire).", en: "Native DFlash speculative decoding for Gemma 4 (Qwen planned): not modeled here (reduces latency, adds a draft model in memory)." }
       - { fr: "La page ne précise ni les formats de poids, ni la précision du KV, ni la gestion des fenêtres glissantes : ces points viennent du code de la bibliothèque.", en: "The page specifies neither weight formats, KV precision nor sliding-window handling: these come from the library code." }
       - { fr: "À ne pas confondre avec llm-d (orchestration Kubernetes de vLLM), couvert par le profil vLLM.", en: "Not to be confused with llm-d (Kubernetes orchestration of vLLM), covered by the vLLM profile." }
+    # The XLA/PJRT allocator reserves its memory fraction for everything, activations included; amounts unverified.
+    memory: { overheadInBudget: true, fixedOverheadGiB: 0.5, cudaGraphGiB: 0 }
+    runtime: { maxNumBatchedTokens: 8192, maxNumSeqs: 256 }
+
+  # SGLang v0.5.22 (October 2026): server arguments, quantization and HiCache documentation, plus
+  # arg_groups/memory_hook.py for memory accounting. Not measured on hardware.
+  - id: sglang
+    name: SGLang
+    description: { fr: "SGLang ≥ 0.5 : RadixAttention, DP-attention et expert parallel pour les MoE, HiCache pour l'offload.", en: "SGLang ≥ 0.5: RadixAttention, DP-attention and expert parallel for MoE models, HiCache for offloading." }
+    version: SGLang 0.5.22
+    confidence: medium
+    features:
+      kvPaging: true
+      kvPoolPreallocated: true
+      prefixCaching: true
+      continuousBatching: true
+      slidingWindowAttention: true
+      slidingWindowFreesBlocks: true
+      tensorParallel: true
+      pipelineParallel: true
+      dpAttention: true
+      kvOffload: true
+    featureNotes:
+      kvPaging: { fr: "--page-size (1 token par défaut).", en: "--page-size (1 token by default)." }
+      kvPoolPreallocated: { fr: "--mem-fraction-static couvre poids + pool KV ; activations et graphes CUDA viennent du reste de la mémoire.", en: "--mem-fraction-static covers weights + KV pool; activations and CUDA graphs come from the rest of the memory." }
+      prefixCaching: { fr: "RadixAttention (--disable-radix-cache pour la couper).", en: "RadixAttention (--disable-radix-cache to turn it off)." }
+      slidingWindowFreesBlocks: { fr: "Pool hybride SWA (--swa-full-tokens-ratio, 0,8 par défaut) ; --disable-hybrid-swa-memory le désactive.", en: "Hybrid SWA pool (--swa-full-tokens-ratio, 0.8 by default); --disable-hybrid-swa-memory turns it off." }
+      pipelineParallel: { fr: "--pp-size, documenté pour réduire le TTFT des longs contextes.", en: "--pp-size, documented to reduce long-context TTFT." }
+      dpAttention: { fr: "--attn-dp-size (remplace --enable-dp-attention) avec --ep-size pour les experts.", en: "--attn-dp-size (replaces --enable-dp-attention) with --ep-size for the experts." }
+      kvOffload: { fr: "HiCache : --enable-hierarchical-cache, --hicache-ratio / --hicache-size.", en: "HiCache: --enable-hierarchical-cache, --hicache-ratio / --hicache-size." }
+    sources:
+      - { label: { fr: "Arguments du serveur SGLang", en: "SGLang server arguments" }, url: "https://docs.sglang.io/docs/advanced_features/server_arguments" }
+      - { label: { fr: "Comptabilité mémoire (memory_hook.py, v0.5.22)", en: "Memory accounting (memory_hook.py, v0.5.22)" }, url: "https://github.com/sgl-project/sglang/blob/v0.5.22/python/sglang/srt/arg_groups/memory_hook.py" }
+      - { label: { fr: "Quantification SGLang", en: "SGLang quantization" }, url: "https://github.com/sgl-project/sglang/blob/v0.5.22/docs/docs/advanced_features/quantization.mdx" }
+    weightFormats:
+      bf16: native
+      fp16: native
+      fp8: native
+      int8: { level: native, note: { fr: "w8a8_int8 ou blockwise_int8.", en: "w8a8_int8 or blockwise_int8." } }
+      int4: { level: native, note: { fr: "AWQ, ou GPTQ via gptq_marlin (CUDA uniquement).", en: "AWQ, or GPTQ via gptq_marlin (CUDA only)." } }
+      mxfp4: native
+      nvfp4: { level: native, note: { fr: "Natif sur sm100+ ; W4A16 Marlin sur sm80-90 ; FlashInfer CUTLASS sur sm120.", en: "Native on sm100+; W4A16 Marlin on sm80-90; FlashInfer CUTLASS on sm120." } }
+    kvCacheFormats:
+      bf16: native
+      fp16: native
+      fp8: { level: native, note: { fr: "--kv-cache-dtype fp8_e4m3 (ou fp8_e5m2).", en: "--kv-cache-dtype fp8_e4m3 (or fp8_e5m2)." } }
+      nvfp4: { level: limited, note: { fr: "KV FP4 expérimental, selon le backend d'attention.", en: "Experimental FP4 KV, depending on the attention backend." } }
+    vendorFormats:
+      amd:
+        weightFormats:
+          int4: { level: limited, note: { fr: "AWQ par déquantification Triton ; GPTQ non supporté sous ROCm.", en: "AWQ through Triton dequantization; GPTQ not supported on ROCm." } }
+          nvfp4: { level: limited, note: { fr: "petit_nvfp4 sur MI300X / MI325X.", en: "petit_nvfp4 on MI300X / MI325X." } }
+    gpus:
+      v100: { level: unverified, note: { fr: "Backend FlashInfer par défaut réservé à sm75+ ; --attention-backend triton en alternative, non vérifié.", en: "Default FlashInfer backend requires sm75+; --attention-backend triton as an alternative, not verified." } }
+    notes:
+      - { fr: "La réserve correspond à 1 − --mem-fraction-static : elle doit couvrir activations et graphes CUDA. Par défaut, SGLang réserve au moins 10 Gio sur les GPU de plus de 60 Gio.", en: "The reserve is 1 − --mem-fraction-static: it must cover activations and CUDA graphs. By default SGLang reserves at least 10 GiB on GPUs above 60 GiB." }
+      - { fr: "Pas de plafond fixe de requêtes simultanées par défaut : la taille du pool KV limite la concurrence.", en: "No fixed cap on concurrent requests by default: the KV pool size limits concurrency." }
+    # Activations and CUDA graphs come from outside --mem-fraction-static.
+    memory: { overheadInBudget: false, fixedOverheadGiB: 0.5, cudaGraphGiB: 1.0 }
+    # Chunked prefill size by GPU memory (server_args.py): < 35 GiB → 4096 (2048 under 20 GiB); < 160 GiB → 8192; otherwise 16384.
+    runtime:
+      maxNumBatchedTokens: 4096
+      maxNumSeqs: 4096
+      byMemory:
+        - { minMemoryGiB: 160, maxNumBatchedTokens: 16384, maxNumSeqs: 4096 }
+        - { minMemoryGiB: 60, maxNumBatchedTokens: 8192, maxNumSeqs: 4096 }
+        - { minMemoryGiB: 20, maxNumBatchedTokens: 4096, maxNumSeqs: 4096 }
+        - { minMemoryGiB: 0, maxNumBatchedTokens: 2048, maxNumSeqs: 4096 }
+    flags:
+      launch: python3 -m sglang.launch_server --model-path
+      maxModelLen: --context-length
+      maxNumBatchedTokens: --chunked-prefill-size
+      maxNumSeqs: --max-running-requests
+      memoryUtilization: --mem-fraction-static
+      kvCacheDtype: --kv-cache-dtype
+      kvCacheDtypeValues: { fp8: fp8_e4m3, nvfp4: nvfp4 }
+      tensorParallel: --tp-size
+      pipelineParallel: --pp-size
+      dpAttention: --tp-size N --attn-dp-size N --ep-size N
+      kvOffload: { fr: "--enable-hierarchical-cache --hicache-size <Gio>", en: "--enable-hierarchical-cache --hicache-size <GiB>" }
 
 # -----------------------------------------------------------------------------
 # GPUs: approximate dense TFLOPS (without sparsity).
@@ -172,6 +286,9 @@ engines:
 gpus:
   - id: v100
     name: V100
+    family: V100
+    variant: { fr: "SXM2 32 Go", en: "SXM2 32 GB" }
+    priceUsdPerHour: 1.75
     architecture: Volta
     computeCapability: "7.0"
     memoryGiB: 31.7
@@ -200,8 +317,142 @@ gpus:
       - { fr: "FlashAttention 2/3 non supporté (sm70).", en: "FlashAttention 2/3 not supported (sm70)." }
       - { fr: "Topologie DGX-1 en hybrid cube mesh : NVLink pas tout-à-tout à 8 GPUs.", en: "DGX-1 hybrid cube-mesh topology: NVLink is not all-to-all across 8 GPUs." }
 
+  # A100: NVIDIA datasheet (BF16 312 TFLOPS dense; 1.555 / 2.039 / 1.935 TB/s). Visible memory is approximate.
+  - id: a100-40
+    name: { fr: "A100 SXM 40 Go", en: "A100 SXM 40 GB" }
+    family: A100
+    variant: { fr: "SXM 40 Go", en: "SXM 40 GB" }
+    priceUsdPerHour: 1.3 # estimate: no price survey for the 40 GB model
+    architecture: Ampere
+    computeCapability: "8.0"
+    memoryGiB: 39.6
+    memoryLabel: { fr: "40 Go HBM2", en: "40 GB HBM2" }
+    bandwidthTBs: 1.555
+    tflops: { bf16: 312 }
+    interconnect: { label: { fr: "NVLink 3 + NVSwitch (600 Go/s bidir.)", en: "NVLink 3 + NVSwitch (600 GB/s bidir.)" }, nvlink: true, bandwidthGBs: 300 }
+    maxGpusPerNode: 8
+    nvlinkDomain: 8
+    hostLinkGBs: 25
+    hostLinkLabel: PCIe Gen4 x16
+    weightFormats: &ampereWeights
+      bf16: native
+      fp16: native
+      fp8: { level: limited, note: { fr: "Pas de FP8 matériel (sm80/86) : W8A16 via FP8 Marlin, poids gardés en FP8, calcul en BF16.", en: "No hardware FP8 (sm80/86): W8A16 through FP8 Marlin, weights kept in FP8, BF16 compute." } }
+      int8: native
+      int4: { level: native, note: { fr: "AWQ / GPTQ via Marlin.", en: "AWQ / GPTQ through Marlin." } }
+      mxfp4: { level: limited, note: { fr: "Pas de FP4 matériel : W4A16 (Marlin), déquantification en BF16.", en: "No hardware FP4: W4A16 (Marlin), dequantized to BF16." } }
+      nvfp4: { level: limited, note: { fr: "Pas de FP4 matériel : W4A16 (Marlin), déquantification en BF16.", en: "No hardware FP4: W4A16 (Marlin), dequantized to BF16." } }
+    kvCacheFormats: &ampereKv
+      bf16: native
+      fp16: native
+      fp8: { level: limited, note: { fr: "Stockage FP8 seulement (déquantifié dans le noyau d'attention) : mémoire divisée par deux, sans gain de calcul.", en: "FP8 storage only (dequantized in the attention kernel): half the memory, no compute gain." } }
+      nvfp4: { level: unverified, note: { fr: "Chemin FlashInfer FA2 dans vLLM récent, non vérifié.", en: "FlashInfer FA2 path in recent vLLM, not verified." } }
+    notes:
+      - { fr: "Pas de FP8 ni de FP4 matériels : les formats 8 et 4 bits réduisent la mémoire, pas le calcul.", en: "No hardware FP8 or FP4: 8- and 4-bit formats reduce memory, not compute." }
+      - { fr: "vLLM garde les petites valeurs par défaut sur A100 (2048 tokens par étape, 256 séquences).", en: "vLLM keeps the small defaults on A100 (2048 tokens per step, 256 sequences)." }
+
+  - id: a100-80
+    name: { fr: "A100 SXM 80 Go", en: "A100 SXM 80 GB" }
+    family: A100
+    variant: { fr: "SXM 80 Go", en: "SXM 80 GB" }
+    priceUsdPerHour: 1.8
+    architecture: Ampere
+    computeCapability: "8.0"
+    memoryGiB: 79.2
+    memoryLabel: { fr: "80 Go HBM2e", en: "80 GB HBM2e" }
+    bandwidthTBs: 2.039
+    tflops: { bf16: 312 }
+    interconnect: { label: { fr: "NVLink 3 + NVSwitch (600 Go/s bidir.)", en: "NVLink 3 + NVSwitch (600 GB/s bidir.)" }, nvlink: true, bandwidthGBs: 300 }
+    maxGpusPerNode: 8
+    nvlinkDomain: 8
+    hostLinkGBs: 25
+    hostLinkLabel: PCIe Gen4 x16
+    weightFormats: *ampereWeights
+    kvCacheFormats: *ampereKv
+    notes:
+      - { fr: "Mémoire visible approximative : vérifiez avec nvidia-smi.", en: "Visible memory is approximate: check with nvidia-smi." }
+
+  - id: a100-pcie-80
+    name: { fr: "A100 PCIe 80 Go", en: "A100 PCIe 80 GB" }
+    family: A100
+    variant: { fr: "PCIe 80 Go", en: "PCIe 80 GB" }
+    priceUsdPerHour: 1.8
+    architecture: Ampere
+    computeCapability: "8.0"
+    memoryGiB: 79.2
+    memoryLabel: { fr: "80 Go HBM2e", en: "80 GB HBM2e" }
+    bandwidthTBs: 1.935
+    tflops: { bf16: 312 }
+    interconnect: { label: { fr: "Pont NVLink par paires (600 Go/s bidir.), PCIe Gen4 au-delà", en: "NVLink bridge in pairs (600 GB/s bidir.), PCIe Gen4 beyond" }, nvlink: true, bandwidthGBs: 300 }
+    maxGpusPerNode: 8
+    nvlinkDomain: 2
+    hostLinkGBs: 25
+    hostLinkLabel: PCIe Gen4 x16
+    weightFormats: *ampereWeights
+    kvCacheFormats: *ampereKv
+    notes:
+      - { fr: "Le pont NVLink relie deux cartes : au-delà, le TP passe par PCIe.", en: "The NVLink bridge links two cards: beyond that, TP goes over PCIe." }
+
+  # L4: NVIDIA L4 page (sparse figures halved), nvidia-smi 23034 MiB.
+  - id: l4
+    name: L4
+    family: L4
+    segment: pcie
+    priceUsdPerHour: 0.8
+    architecture: Ada Lovelace
+    computeCapability: "8.9"
+    memoryGiB: 22.5
+    memoryLabel: { fr: "24 Go GDDR6", en: "24 GB GDDR6" }
+    bandwidthTBs: 0.3
+    tflops: { bf16: 121, fp8: 242 }
+    interconnect: { label: { fr: "PCIe Gen4 x16 (~32 Go/s par sens)", en: "PCIe Gen4 x16 (~32 GB/s per direction)" }, nvlink: false, bandwidthGBs: 32 }
+    maxGpusPerNode: 8
+    nvlinkDomain: 1
+    hostLinkGBs: 25
+    hostLinkLabel: PCIe Gen4 x16
+    weightFormats: &adaWeights
+      bf16: native
+      fp16: native
+      fp8: native
+      int8: native
+      int4: native
+      mxfp4: { level: limited, note: { fr: "Pas de FP4 matériel : W4A16 (Marlin), déquantification en BF16.", en: "No hardware FP4: W4A16 (Marlin), dequantized to BF16." } }
+      nvfp4: { level: limited, note: { fr: "Pas de FP4 matériel : W4A16 (Marlin), déquantification en BF16.", en: "No hardware FP4: W4A16 (Marlin), dequantized to BF16." } }
+    kvCacheFormats: &adaKv
+      bf16: native
+      fp16: native
+      fp8: native
+      nvfp4: { level: unsupported, note: { fr: "Blackwell uniquement.", en: "Blackwell only." } }
+    notes:
+      - { fr: "Carte 72 W, 300 Go/s : décodage lent, adaptée aux petits modèles.", en: "72 W card, 300 GB/s: slow decoding, suited to small models." }
+
+  # A10: NVIDIA A10 page (BF16 125 TFLOPS dense). AWS A10G: nvidia-smi 23028 MiB; its tensor throughput is lower and unpublished.
+  - id: a10
+    name: A10 / A10G
+    family: A10
+    segment: pcie
+    priceUsdPerHour: 1.3
+    architecture: Ampere
+    computeCapability: "8.6"
+    memoryGiB: 22.5
+    memoryLabel: { fr: "24 Go GDDR6", en: "24 GB GDDR6" }
+    bandwidthTBs: 0.6
+    tflops: { bf16: 125 }
+    interconnect: { label: { fr: "PCIe Gen4 x16 (~32 Go/s par sens)", en: "PCIe Gen4 x16 (~32 GB/s per direction)" }, nvlink: false, bandwidthGBs: 32 }
+    maxGpusPerNode: 8
+    nvlinkDomain: 1
+    hostLinkGBs: 25
+    hostLinkLabel: PCIe Gen4 x16
+    weightFormats: *ampereWeights
+    kvCacheFormats: *ampereKv
+    notes:
+      - { fr: "A10G (AWS G5) : même mémoire, débit tensor core plus faible et non publié (≈ 70 TFLOPS BF16 selon des sources tierces).", en: "A10G (AWS G5): same memory, lower and unpublished tensor throughput (≈ 70 BF16 TFLOPS per third-party sources)." }
+
   - id: l40s
     name: L40S
+    family: L40S
+    segment: pcie
+    priceUsdPerHour: 1.4
     architecture: Ada Lovelace
     computeCapability: "8.9"
     memoryGiB: 45.0
@@ -232,6 +483,9 @@ gpus:
 
   - id: h100
     name: H100 SXM
+    family: H100
+    variant: { fr: "SXM 80 Go", en: "SXM 80 GB" }
+    priceUsdPerHour: 3.3
     architecture: Hopper
     computeCapability: "9.0"
     memoryGiB: 79.6
@@ -258,8 +512,33 @@ gpus:
       nvfp4: { level: unsupported, note: { fr: "Blackwell uniquement.", en: "Blackwell only." } }
     notes: []
 
+  # H100 NVL: NVIDIA H100 page (sparse figures halved), 94 GB per card, NVLink bridge in pairs.
+  - id: h100-nvl
+    name: H100 NVL
+    family: H100
+    variant: { fr: "NVL 94 Go (PCIe)", en: "NVL 94 GB (PCIe)" }
+    priceUsdPerHour: 3.0 # estimate: no price survey
+    architecture: Hopper
+    computeCapability: "9.0"
+    memoryGiB: 93.6
+    memoryLabel: { fr: "94 Go HBM3", en: "94 GB HBM3" }
+    bandwidthTBs: 3.9
+    tflops: { bf16: 835, fp8: 1671 }
+    interconnect: { label: { fr: "Pont NVLink par paires (600 Go/s bidir.), PCIe Gen5 au-delà", en: "NVLink bridge in pairs (600 GB/s bidir.), PCIe Gen5 beyond" }, nvlink: true, bandwidthGBs: 300 }
+    maxGpusPerNode: 8
+    nvlinkDomain: 2
+    hostLinkGBs: 55
+    hostLinkLabel: PCIe Gen5 x16
+    weightFormats: *hopperWeights
+    kvCacheFormats: *hopperKv
+    notes:
+      - { fr: "Carte PCIe : le pont NVLink relie deux cartes ; au-delà, le TP passe par PCIe. Mémoire visible approximative.", en: "PCIe card: the NVLink bridge links two cards; beyond that, TP goes over PCIe. Visible memory is approximate." }
+
   - id: h200
     name: H200
+    family: H200
+    variant: { fr: "SXM 141 Go", en: "SXM 141 GB" }
+    priceUsdPerHour: 4.2
     architecture: Hopper
     computeCapability: "9.0"
     memoryGiB: 140.4
@@ -275,8 +554,33 @@ gpus:
     kvCacheFormats: *hopperKv
     notes: []
 
+  # H200 NVL: NVIDIA H200 page (sparse figures halved), NVLink bridge 2- or 4-way.
+  - id: h200-nvl
+    name: H200 NVL
+    family: H200
+    variant: { fr: "NVL 141 Go (PCIe)", en: "NVL 141 GB (PCIe)" }
+    priceUsdPerHour: 4.0 # estimate: no price survey
+    architecture: Hopper
+    computeCapability: "9.0"
+    memoryGiB: 140.4
+    memoryLabel: { fr: "141 Go HBM3e", en: "141 GB HBM3e" }
+    bandwidthTBs: 4.8
+    tflops: { bf16: 835, fp8: 1671 }
+    interconnect: { label: { fr: "Pont NVLink 2 ou 4 voies (900 Go/s bidir.), PCIe Gen5 au-delà", en: "2- or 4-way NVLink bridge (900 GB/s bidir.), PCIe Gen5 beyond" }, nvlink: true, bandwidthGBs: 450 }
+    maxGpusPerNode: 8
+    nvlinkDomain: 4
+    hostLinkGBs: 55
+    hostLinkLabel: PCIe Gen5 x16
+    weightFormats: *hopperWeights
+    kvCacheFormats: *hopperKv
+    notes:
+      - { fr: "Carte PCIe : le pont NVLink relie jusqu'à quatre cartes ; au-delà, le TP passe par PCIe.", en: "PCIe card: the NVLink bridge links up to four cards; beyond that, TP goes over PCIe." }
+
   - id: gh200
     name: { fr: "GH200 (96 Go)", en: "GH200 (96 GB)" }
+    family: GH200
+    variant: { fr: "96 Go HBM3", en: "96 GB HBM3" }
+    priceUsdPerHour: 3.3 # estimate: priced like an H100
     architecture: Hopper + Grace
     computeCapability: "9.0"
     memoryGiB: 95.6
@@ -297,6 +601,9 @@ gpus:
 
   - id: gh200-144
     name: { fr: "GH200 (144 Go)", en: "GH200 (144 GB)" }
+    family: GH200
+    variant: { fr: "144 Go HBM3e", en: "144 GB HBM3e" }
+    priceUsdPerHour: 4.2 # estimate: priced like an H200
     architecture: Hopper + Grace
     computeCapability: "9.0"
     memoryGiB: 139.5
@@ -317,6 +624,9 @@ gpus:
 
   - id: b200
     name: B200
+    family: B200
+    variant: { fr: "HGX (8 GPUs)", en: "HGX (8 GPUs)" }
+    priceUsdPerHour: 6.5
     architecture: Blackwell
     computeCapability: "10.0"
     memoryGiB: 179.1
@@ -345,6 +655,9 @@ gpus:
 
   - id: gb200
     name: GB200
+    family: B200
+    variant: { fr: "GB200 NVL72", en: "GB200 NVL72" }
+    priceUsdPerHour: 8.0
     architecture: Blackwell + Grace
     computeCapability: "10.0"
     memoryGiB: 185.0
@@ -365,6 +678,9 @@ gpus:
 
   - id: b300
     name: B300
+    family: B300
+    variant: { fr: "HGX (8 GPUs)", en: "HGX (8 GPUs)" }
+    priceUsdPerHour: 8.0
     architecture: Blackwell Ultra
     computeCapability: "10.3"
     memoryGiB: 268.2
@@ -390,6 +706,9 @@ gpus:
 
   - id: gb300
     name: GB300
+    family: B300
+    variant: { fr: "GB300 NVL72", en: "GB300 NVL72" }
+    priceUsdPerHour: 10.0 # estimate: no price survey
     architecture: Blackwell Ultra + Grace
     computeCapability: "10.3"
     memoryGiB: 268.2
@@ -407,6 +726,165 @@ gpus:
     notes:
       - { fr: "Un superchip GB300 = 1 Grace + 2 GPUs ; le compteur désigne les GPUs. Domaine NVLink de 72 GPUs (NVL72).", en: "One GB300 superchip = 1 Grace + 2 GPUs; the count refers to GPUs. 72-GPU NVLink domain (NVL72)." }
       - { fr: "Mémoire visible approximative : vérifiez avec nvidia-smi.", en: "Visible memory is approximate: check with nvidia-smi." }
+
+  # AMD Instinct: AMD datasheets and ROCm GPU specs. One 8-GPU OAM platform, Infinity Fabric between all GPUs.
+  - id: mi300x
+    name: MI300X
+    family: MI300X
+    vendor: amd
+    priceUsdPerHour: 3.0
+    architecture: CDNA 3
+    computeCapability: gfx942
+    memoryGiB: 191.7
+    memoryLabel: { fr: "192 Go HBM3", en: "192 GB HBM3" }
+    bandwidthTBs: 5.3
+    tflops: { bf16: 1307, fp8: 2615 }
+    interconnect: { label: { fr: "Infinity Fabric, 7 liens × 128 Go/s", en: "Infinity Fabric, 7 links × 128 GB/s" }, nvlink: true, fabric: Infinity Fabric, bandwidthGBs: 448 }
+    maxGpusPerNode: 8
+    nvlinkDomain: 8
+    hostLinkGBs: 55
+    hostLinkLabel: PCIe Gen5 x16
+    weightFormats: &cdna3Weights
+      bf16: native
+      fp16: native
+      fp8: { level: native, note: { fr: "FP8 e4m3fnuz ; les checkpoints FP8 OCP sont convertis au chargement.", en: "FP8 e4m3fnuz; OCP FP8 checkpoints are converted at load time." } }
+      int8: native
+      int4: { level: limited, note: { fr: "Pas d'INT4 matériel : déquantification en BF16.", en: "No hardware INT4: dequantized to BF16." } }
+      mxfp4: { level: limited, note: { fr: "Pas de FP4 matériel (CDNA3) : émulation, déquantification à la volée.", en: "No hardware FP4 (CDNA3): emulation, dequantized on the fly." } }
+      nvfp4: { level: limited, note: { fr: "Pas de FP4 matériel : émulation.", en: "No hardware FP4: emulation." } }
+    kvCacheFormats: &amdKv
+      bf16: native
+      fp16: native
+      fp8: native
+      nvfp4: { level: unsupported, note: { fr: "Format NVIDIA, sans support matériel AMD.", en: "NVIDIA format, no AMD hardware support." } }
+    notes:
+      - { fr: "Pile ROCm (vLLM : ROCm ≥ 6.3). Mémoire visible approximative : vérifiez avec amd-smi.", en: "ROCm stack (vLLM: ROCm ≥ 6.3). Visible memory is approximate: check with amd-smi." }
+
+  - id: mi325x
+    name: MI325X
+    family: MI325X
+    vendor: amd
+    priceUsdPerHour: 4.2 # low confidence: two providers
+    architecture: CDNA 3
+    computeCapability: gfx942
+    memoryGiB: 255.5
+    memoryLabel: { fr: "256 Go HBM3E", en: "256 GB HBM3E" }
+    bandwidthTBs: 6.0
+    tflops: { bf16: 1307, fp8: 2615 }
+    interconnect: { label: { fr: "Infinity Fabric, 7 liens × 128 Go/s", en: "Infinity Fabric, 7 links × 128 GB/s" }, nvlink: true, fabric: Infinity Fabric, bandwidthGBs: 448 }
+    maxGpusPerNode: 8
+    nvlinkDomain: 8
+    hostLinkGBs: 55
+    hostLinkLabel: PCIe Gen5 x16
+    weightFormats: *cdna3Weights
+    kvCacheFormats: *amdKv
+    notes:
+      - { fr: "Même calcul que le MI300X, plus de mémoire et de bande passante. Mémoire visible approximative.", en: "Same compute as the MI300X, more memory and bandwidth. Visible memory is approximate." }
+
+  - id: mi355x
+    name: MI355X
+    family: MI355X
+    vendor: amd
+    priceUsdPerHour: 7.0 # low confidence
+    architecture: CDNA 4
+    computeCapability: gfx950
+    memoryGiB: 287.5
+    memoryLabel: { fr: "288 Go HBM3E", en: "288 GB HBM3E" }
+    bandwidthTBs: 8.0
+    tflops: { bf16: 2517, fp8: 5033, fp4: 10066 }
+    interconnect: { label: { fr: "Infinity Fabric, 7 liens × 144 Go/s", en: "Infinity Fabric, 7 links × 144 GB/s" }, nvlink: true, fabric: Infinity Fabric, bandwidthGBs: 504 }
+    maxGpusPerNode: 8
+    nvlinkDomain: 8
+    hostLinkGBs: 55
+    hostLinkLabel: PCIe Gen5 x16
+    weightFormats:
+      bf16: native
+      fp16: native
+      fp8: { level: native, note: { fr: "FP8 OCP (e4m3fn).", en: "OCP FP8 (e4m3fn)." } }
+      int8: native
+      int4: { level: limited, note: { fr: "Pas d'INT4 matériel : déquantification en BF16.", en: "No hardware INT4: dequantized to BF16." } }
+      mxfp4: { level: native, note: { fr: "MXFP4 et MXFP6 matériels (AITER dans vLLM).", en: "Hardware MXFP4 and MXFP6 (AITER in vLLM)." } }
+      nvfp4: { level: limited, note: { fr: "Format NVIDIA : émulation.", en: "NVIDIA format: emulation." } }
+    kvCacheFormats: *amdKv
+    notes:
+      - { fr: "Pile ROCm ≥ 7.0. Mémoire visible approximative : vérifiez avec amd-smi.", en: "ROCm ≥ 7.0 stack. Visible memory is approximate: check with amd-smi." }
+
+  # RTX PRO 6000 Blackwell Server Edition: Lenovo product guide (sparse figures halved), no NVLink.
+  - id: rtx-pro-6000
+    name: RTX PRO 6000
+    family: RTX PRO 6000
+    variant: { fr: "Blackwell Server 96 Go", en: "Blackwell Server 96 GB" }
+    segment: pcie
+    priceUsdPerHour: 2.0
+    architecture: Blackwell (GB202)
+    computeCapability: "12.0"
+    memoryGiB: 95.0
+    memoryLabel: { fr: "96 Go GDDR7 ECC", en: "96 GB GDDR7 ECC" }
+    bandwidthTBs: 1.597
+    tflops: { bf16: 500, fp8: 1000, fp4: 2000 }
+    interconnect: { label: { fr: "PCIe Gen5 x16 (~64 Go/s par sens), sans NVLink", en: "PCIe Gen5 x16 (~64 GB/s per direction), no NVLink" }, nvlink: false, bandwidthGBs: 64 }
+    maxGpusPerNode: 8
+    nvlinkDomain: 1
+    hostLinkGBs: 55
+    hostLinkLabel: PCIe Gen5 x16
+    weightFormats: &rtxBlackwellWeights
+      bf16: native
+      fp16: native
+      fp8: native
+      int8: { level: unverified, note: { fr: "sm120 : noyaux CUTLASS W8A8 de vLLM en FP8 seulement ; chemin INT8 non vérifié.", en: "sm120: vLLM's CUTLASS W8A8 kernels are FP8-only; INT8 path not verified." } }
+      int4: { level: native, note: { fr: "AWQ / GPTQ via Marlin.", en: "AWQ / GPTQ through Marlin." } }
+      mxfp4: { level: limited, note: { fr: "W4A16 Marlin par défaut ; natif avec le paquet optionnel vllm[b12x].", en: "W4A16 Marlin by default; native with the optional vllm[b12x] package." } }
+      nvfp4: { level: native, note: { fr: "Noyaux CUTLASS sm120.", en: "CUTLASS sm120 kernels." } }
+    kvCacheFormats: &rtxBlackwellKv
+      bf16: native
+      fp16: native
+      fp8: native
+      nvfp4: { level: unverified, note: { fr: "Chemin FlashInfer FA2 dans vLLM récent, non vérifié sur sm120.", en: "FlashInfer FA2 path in recent vLLM, not verified on sm120." } }
+    notes:
+      - { fr: "Édition Workstation : même mémoire, 1,79 To/s. Mémoire visible approximative.", en: "Workstation edition: same memory, 1.79 TB/s. Visible memory is approximate." }
+
+  # GeForce: Ada and RTX Blackwell whitepapers, FP32-accumulate tensor throughput (half the FP16-accumulate figures).
+  - id: rtx-4090
+    name: RTX 4090
+    family: RTX 4090
+    segment: pcie
+    priceUsdPerHour: 0.6 # estimate: community clouds, no price survey
+    architecture: Ada Lovelace
+    computeCapability: "8.9"
+    memoryGiB: 23.99
+    memoryLabel: { fr: "24 Go GDDR6X", en: "24 GB GDDR6X" }
+    bandwidthTBs: 1.008
+    tflops: { bf16: 165, fp8: 330 }
+    interconnect: { label: { fr: "PCIe Gen4 x16, sans NVLink", en: "PCIe Gen4 x16, no NVLink" }, nvlink: false, bandwidthGBs: 32 }
+    maxGpusPerNode: 8
+    nvlinkDomain: 1
+    hostLinkGBs: 25
+    hostLinkLabel: PCIe Gen4 x16
+    weightFormats: *adaWeights
+    kvCacheFormats: *adaKv
+    notes:
+      - { fr: "Carte grand public : pas d'ECC, P2P GPU↔GPU désactivé par le pilote.", en: "Consumer card: no ECC, GPU↔GPU P2P disabled by the driver." }
+
+  - id: rtx-5090
+    name: RTX 5090
+    family: RTX 5090
+    segment: pcie
+    priceUsdPerHour: 0.9 # estimate: community clouds, no price survey
+    architecture: Blackwell (GB202)
+    computeCapability: "12.0"
+    memoryGiB: 31.8
+    memoryLabel: { fr: "32 Go GDDR7", en: "32 GB GDDR7" }
+    bandwidthTBs: 1.792
+    tflops: { bf16: 209, fp8: 419, fp4: 1676 }
+    interconnect: { label: { fr: "PCIe Gen5 x16, sans NVLink", en: "PCIe Gen5 x16, no NVLink" }, nvlink: false, bandwidthGBs: 64 }
+    maxGpusPerNode: 8
+    nvlinkDomain: 1
+    hostLinkGBs: 55
+    hostLinkLabel: PCIe Gen5 x16
+    weightFormats: *rtxBlackwellWeights
+    kvCacheFormats: *rtxBlackwellKv
+    notes:
+      - { fr: "Carte grand public : pas d'ECC. Mémoire visible approximative.", en: "Consumer card: no ECC. Visible memory is approximate." }
 
 # -----------------------------------------------------------------------------
 # Models

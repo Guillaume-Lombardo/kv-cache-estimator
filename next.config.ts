@@ -21,10 +21,14 @@ function basePathFromEnv(): string {
   return value;
 }
 
+const basePath = basePathFromEnv();
+
 const nextConfig: NextConfig = {
   // Read the configuration on the server at startup (see src/lib/load-config.ts).
   output: "standalone",
-  basePath: basePathFromEnv(),
+  basePath,
+  // Client code prefixes its own API calls (fetch does not apply basePath).
+  env: { KV_ESTIMATOR_PUBLIC_BASE_PATH: basePath },
 };
 
 export default nextConfig;

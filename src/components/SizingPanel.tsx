@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { contextLabel, type EstimateInput, type ParallelMode } from "@/lib/calc";
 import type { AppConfig } from "@/lib/config-schema";
+import { GPU_GROUPS, gpuGroupOf, type GpuGroupId } from "@/lib/gpu-groups";
 import { maxContextFor, sizeForTarget } from "@/lib/planning";
 import { usePrefs } from "./Prefs";
 
@@ -16,8 +17,9 @@ export interface SizingChoice {
 }
 
 export function SizingPanel({ config, input, onApply }: { config: AppConfig; input: EstimateInput; onApply: (c: SizingChoice) => void }) {
-  const { t, fmt } = usePrefs();
+  const { lang, t, fmt } = usePrefs();
   const [target, setTarget] = useState(32);
+  const [group, setGroup] = useState<GpuGroupId | "all">("all");
   const rows = useMemo(
     () => sizeForTarget(config, { ...input, weightFormatId: input.weightFormat.id, kvFormatId: input.kvFormat.id }, target, input.gpu.id),
     [config, input, target],
@@ -40,6 +42,13 @@ export function SizingPanel({ config, input, onApply }: { config: AppConfig; inp
           "For each card: smallest number of GPUs that reaches the target, testing every valid TP degree (completed with PP) and DP-attention for MoE models; for the same number of cards, the configuration with the best throughput at the target is kept. Formats are kept when the card supports them. Click a row to apply it.",
         )}
       </p>
+      <div className="filter-row">
+        {(["all", ...GPU_GROUPS.map((g) => g.id)] as const).map((id) => (
+          <button key={id} type="button" className={`btn${group === id ? " primary" : ""}`} onClick={() => setGroup(id)}>
+            {id === "all" ? t("Toutes", "All") : GPU_GROUPS.find((g) => g.id === id)![lang]}
+          </button>
+        ))}
+      </div>
       <div className="table-wrap">
         <table className="table compact clickable">
           <thead>
@@ -53,7 +62,7 @@ export function SizingPanel({ config, input, onApply }: { config: AppConfig; inp
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {rows.filter((r) => group === "all" || gpuGroupOf(r.gpu) === group).map((r) => (
               <tr
                 key={r.gpu.id}
                 className={r.gpuCount === null ? "row-disabled" : r.gpu.id === input.gpu.id ? "row-current" : ""}
@@ -80,7 +89,7 @@ export function SizingPanel({ config, input, onApply }: { config: AppConfig; inp
             <strong>{contextLabel(maxCtx)}</strong>.
           </>
         ) : (
-          <>{t(`objectif inatteignable sans erreur, même à ${contextLabel(8192)}.`, `target unreachable without errors, even at ${contextLabel(8192)}.`)}</>
+          <>{t("objectif inatteignable sans erreur, même au plus petit palier.", "target unreachable without errors, even at the smallest preset.")}</>
         )}
       </p>
     </div>

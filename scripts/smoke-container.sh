@@ -131,6 +131,20 @@ check_assets() {
   fi
 }
 
+# The JSON API answers under the base path, and only there.
+check_api() {
+  local body status
+  body="$(curl --fail --silent --show-error "$origin$base_path/api/estimate?model=qwen3-8b&gpu=h100&lang=en")" \
+    || fail "$base_path/api/estimate did not answer."
+  grep -q '"sessions"' <<< "$body" || fail "$base_path/api/estimate returned no report."
+  status="$(curl -s -o /dev/null -w '%{http_code}' "$origin$base_path/api/estimate?model=does-not-exist")"
+  [[ "$status" == 400 ]] || fail "an unknown model returned HTTP $status, expected 400."
+  if [[ -n "$base_path" ]]; then
+    status="$(curl -s -o /dev/null -w '%{http_code}' "$origin/api/estimate")"
+    [[ "$status" == 404 ]] || fail "/api/estimate is served without the $base_path prefix (HTTP $status)."
+  fi
+}
+
 check_image() {
   local built_path
   # The standalone server reads the base path compiled into the build, not the environment.
@@ -156,6 +170,7 @@ check_image
 wait_for_page
 check_pages
 check_assets
+check_api
 check_browser
 stop_container
 

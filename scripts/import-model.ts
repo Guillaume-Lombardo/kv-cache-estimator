@@ -3,9 +3,12 @@
 // Usage:
 //   pnpm run import-model path/config.json [--params 235] [--active 22] [--id my-model]
 //                           [--name "My model"] [--family "Qwen (Alibaba)"] [--source org/repo] [--append]
+//   pnpm run import-model --hf org/repo [--revision sha] [options…]   (downloads config.json and the parameter count;
+//                           HF_TOKEN opens gated repositories)
 //
 // --append adds the entry to the configuration file (models section), then validates it.
 import { readFile, appendFile } from "node:fs/promises";
+import { fetchHfModel } from "../src/lib/hf-fetch";
 import { convertHfConfig, modelToYaml, type ImportOptions } from "../src/lib/hf-import";
 import { configPath, parseConfigFile } from "../src/lib/load-config";
 
@@ -21,11 +24,14 @@ const opt = (k: string) => {
 };
 
 async function main() {
-  if (!file) {
-    console.error("Usage : pnpm run import-model chemin/config.json [--params N] [--active N] [--id …] [--append]");
+  const hf = opt("hf");
+  if (!file && !hf) {
+    console.error("Usage : pnpm run import-model chemin/config.json | --hf org/nom [--params N] [--active N] [--id …] [--append]");
     process.exit(2);
   }
-  const json = JSON.parse(await readFile(file, "utf8"));
+  const json = hf
+    ? await fetchHfModel(hf, { revision: opt("revision"), token: process.env.HF_TOKEN || undefined })
+    : JSON.parse(await readFile(file!, "utf8"));
   const options: ImportOptions = {
     id: opt("id"),
     name: opt("name"),

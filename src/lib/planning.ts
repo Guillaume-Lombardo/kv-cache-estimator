@@ -1,5 +1,5 @@
 import {
-  CONTEXT_STEPS,
+  contextCandidates,
   collectIssues,
   estimate,
   isMoE,
@@ -45,7 +45,7 @@ export function divisors(n: number): number[] {
   return out;
 }
 
-/** Practical TP limit: the NVLink domain, or a PCIe server otherwise. */
+/** Practical TP limit: the scale-up fabric domain (NVLink, Infinity Fabric), or a PCIe server otherwise. */
 export function maxTp(g: GpuSpec): number {
   return g.interconnect.nvlink ? Math.max(g.nvlinkDomain, 1) : g.maxGpusPerNode;
 }
@@ -81,9 +81,38 @@ export function isValidConfig(cfg: AppConfig, input: EstimateInput): boolean {
   return !collectIssues(input, est, cfg.weightFormats).some((i) => i.severity === "error");
 }
 
+export type SizingBase = Omit<EstimateInput, "gpu" | "gpuCount" | "tp" | "mode" | "weightFormat" | "kvFormat"> & { weightFormatId: string; kvFormatId: string };
+
+/** Formats used on one GPU type: the base selection when supported, with a note for each fallback. */
+export function formatsFor(cfg: AppConfig, base: SizingBase, gpu: GpuSpec) {
+  const t = tr(base.lang ?? "fr");
+  const wfId = pickWeightFormat(cfg, base.model, gpu, base.engine, base.weightFormatId);
+  const kfId = pickKvFormat(cfg, gpu, base.engine, base.kvFormatId);
+  const weightFormat = cfg.weightFormats.find((f) => f.id === wfId)!;
+  const kvFormat = cfg.kvCacheFormats.find((f) => f.id === kfId)!;
+  const notes: string[] = [];
+  if (wfId !== base.weightFormatId) notes.push(t(`poids ${weightFormat.label}`, `${weightFormat.label} weights`));
+  if (kfId !== base.kvFormatId) notes.push(`KV ${kvFormat.label}`);
+  return { wfId, kfId, weightFormat, kvFormat, notes };
+}
+
+/** Configurations to evaluate for n GPUs of one type: every valid TP degree (rest in PP), plus DP-attention for MoE. */
+export function instanceInputs(cfg: AppConfig, base: SizingBase, gpu: GpuSpec, n: number, baseGpuId?: string): EstimateInput[] {
+  const { weightFormat, kvFormat } = formatsFor(cfg, base, gpu);
+  const configs: { mode: ParallelMode; tp: number }[] = divisors(n)
+    .filter((d) => d <= maxTp(gpu) && isValidTp(base.model, d))
+    .map((tp) => ({ mode: "tp-pp" as const, tp }));
+  if (n > 1 && isMoE(base.model) && base.engine.features.dpAttention !== false) configs.push({ mode: "dp-ep", tp: 1 });
+  const memoryWeightFormat = memoryFormatFor(cfg.weightFormats, gpu, base.engine, weightFormat);
+  // The visible-memory override applies only to the GPU type for which it was entered.
+  const memoryGiBOverride = gpu.id === baseGpuId ? base.memoryGiBOverride : undefined;
+  const { weightFormatId: _w, kvFormatId: _k, ...rest } = base;
+  return configs.map((c) => ({ ...rest, gpu, gpuCount: n, mode: c.mode, tp: c.tp, weightFormat, memoryWeightFormat, kvFormat, memoryGiBOverride }));
+}
+
 export function sizeForTarget(
   cfg: AppConfig,
-  base: Omit<EstimateInput, "gpu" | "gpuCount" | "tp" | "mode" | "weightFormat" | "kvFormat"> & { weightFormatId: string; kvFormatId: string },
+  base: SizingBase,
   targetSessions: number,
   baseGpuId?: string,
 ): SizingRow[] {
@@ -91,28 +120,14 @@ export function sizeForTarget(
   const maxCtx = base.model.maxContextExtended ?? base.model.maxContext;
   const t = tr(base.lang ?? "fr");
   for (const gpu of cfg.gpus) {
-    const wfId = pickWeightFormat(cfg, base.model, gpu, base.engine, base.weightFormatId);
-    const kfId = pickKvFormat(cfg, gpu, base.engine, base.kvFormatId);
-    const weightFormat = cfg.weightFormats.find((f) => f.id === wfId)!;
-    const kvFormat = cfg.kvCacheFormats.find((f) => f.id === kfId)!;
-    const notes: string[] = [];
-    if (wfId !== base.weightFormatId) notes.push(t(`poids ${weightFormat.label}`, `${weightFormat.label} weights`));
-    if (kfId !== base.kvFormatId) notes.push(`KV ${kvFormat.label}`);
+    const { wfId, kfId, notes } = formatsFor(cfg, base, gpu);
 
     let found: SizingRow | null = null;
     for (const n of gpuCountOptions(cfg, gpu)) {
-      const configs: { mode: ParallelMode; tp: number }[] = divisors(n)
-        .filter((d) => d <= maxTp(gpu) && isValidTp(base.model, d))
-        .map((tp) => ({ mode: "tp-pp" as const, tp }));
-      if (n > 1 && isMoE(base.model) && base.engine.features.dpAttention !== false) configs.push({ mode: "dp-ep", tp: 1 });
       // Among configurations reaching the target, keep the highest aggregate throughput
       // (measured at the target concurrency, not at full capacity).
       let best: { input: EstimateInput; sessions: number; rate: number; score: number; unverified: boolean } | null = null;
-      for (const c of configs) {
-        const memoryWeightFormat = memoryFormatFor(cfg.weightFormats, gpu, base.engine, weightFormat);
-        // The visible-memory override applies only to the GPU type for which it was entered.
-        const memoryGiBOverride = gpu.id === baseGpuId ? base.memoryGiBOverride : undefined;
-        const input: EstimateInput = { ...base, gpu, gpuCount: n, mode: c.mode, tp: c.tp, weightFormat, memoryWeightFormat, kvFormat, memoryGiBOverride };
+      for (const input of instanceInputs(cfg, base, gpu, n, baseGpuId)) {
         const est = estimate(input);
         if (est.sessions < targetSessions) continue;
         const issues = collectIssues(input, est, cfg.weightFormats);
@@ -156,12 +171,10 @@ export function sizeForTarget(
   return rows.sort((a, b) => (a.gpuCount ?? 1e9) - (b.gpuCount ?? 1e9) || b.sessions - a.sessions);
 }
 
-/** Largest context step within the model limit that supports `targetSessions` without errors. */
+/** Largest preset context (or model limit) that supports `targetSessions` without errors. */
 export function maxContextFor(cfg: AppConfig, input: EstimateInput, targetSessions: number): number | null {
   let best: number | null = null;
-  const limit = input.model.maxContextExtended ?? input.model.maxContext;
-  for (const t of CONTEXT_STEPS) {
-    if (t > limit) break;
+  for (const t of contextCandidates(input.model)) {
     const i = { ...input, contextTokens: t };
     if (estimate(i).sessions >= targetSessions && isValidConfig(cfg, i)) best = t;
   }

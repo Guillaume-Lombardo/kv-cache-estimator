@@ -1,6 +1,6 @@
 # KV cache estimator
 
-A single-page Next.js / TypeScript application for estimating the memory required to serve open-weight LLMs on NVIDIA GPUs: model weights, KV cache per request, concurrent sessions and approximate throughput. It also supports inverse sizing and scenario comparison. The reference engine is vLLM, including deployments orchestrated by llm-d.
+A single-page Next.js / TypeScript application for estimating the memory required to serve open-weight LLMs on NVIDIA and AMD GPUs: model weights, KV cache per request, runtime overhead, concurrent sessions and approximate throughput. It also sizes deployments for a workload (request rate, prompt and output lengths, TTFT and ITL targets, cost), compares aggregated and prefill/decode-disaggregated serving, and supports inverse sizing and scenario comparison. The reference engine is vLLM, including deployments orchestrated by llm-d; SGLang and ZML / LLMD profiles are also included.
 
 The interface is available in French and English, with a light, dark or system theme. The buttons at the top right switch both; the choice is stored in cookies (`kv-lang`, `kv-theme`) so the server renders the right language and theme directly. Without a cookie, the language follows the browser's `Accept-Language` header (French by default). Repository documentation, Markdown files, source comments and docstrings are written in English.
 
@@ -25,6 +25,15 @@ pnpm run check-config /etc/kv/estimator.yaml    # Validate another file
 ```
 
 Invalid configuration produces an error page. The schema is strict: unknown or misspelled keys are rejected.
+
+The same calculation is available as JSON, with the page's URL parameters (`model`, `gpu`, `n`, `tp`, `mode`, `eng`, `w`, `kv`, `ctx`, `r`, `in`, `out`, `rps`, `ttft`, `itl`, …) plus `lang=fr|en`:
+
+```bash
+curl 'http://localhost:3000/api/estimate?model=qwen3-32b&gpu=h100&n=2&ctx=65536&rps=4&lang=en'
+pnpm run estimate model=qwen3-32b gpu=h100 n=2 ctx=65536 rps=4   # same report, from the catalogue file
+```
+
+Unknown identifiers return HTTP 400 (exit code 2 for the CLI). Each reported issue carries a stable `code` alongside its localized title.
 
 To serve the application under a URL prefix instead of the root, set `KV_ESTIMATOR_BASE_PATH` for both the build and the server, for example `KV_ESTIMATOR_BASE_PATH=/kv-estimator pnpm run build && KV_ESTIMATOR_BASE_PATH=/kv-estimator pnpm start`, then open <http://localhost:3000/kv-estimator>. See [Serving under a URL prefix](#serving-under-a-url-prefix).
 
@@ -218,12 +227,13 @@ After the first publication, check the package's visibility in GitHub Packages. 
 Convert a Hugging Face `config.json` or Mistral `params.json` into a catalogue entry:
 
 ```bash
+pnpm run import-model --hf Qwen/Qwen3-8B          # download config.json and the parameter count from the Hub
 pnpm run import-model path/config.json
 pnpm run import-model path/config.json --append
 pnpm run import-model config.json --source org/repo --params 235 --active 22 --id my-model
 ```
 
-Without `--append`, the command prints YAML. With `--append`, it adds the entry to the catalogue and validates the result. The UI's model import tab also accepts pasted or uploaded JSON. Imported models can be tested and saved in the current browser.
+Without `--append`, the command prints YAML. With `--append`, it adds the entry to the catalogue and validates the result. The UI's model import tab fetches a repository by name through the server (`/api/hf-model?repo=org/name`, which only contacts `huggingface.co`) or accepts pasted or uploaded JSON. Imported models can be tested and saved in the current browser. Gated repositories need a token: set `HF_TOKEN` for the server or the CLI. Without network access, paste the file instead.
 
 The converter recognizes GQA/MHA, sliding windows (`layer_types`, `hybrid_layer_pattern`, `sliding_window_pattern`), Llama 4 chunked attention, MLA and DSA indexers (including IndexShare and pooling), cross-layer KV sharing (`kv_source_layers`), Mamba-2, Gated DeltaNet, KDA, NAS-pruned `block_configs`, and Mistral's `params.json` structure.
 
@@ -243,14 +253,15 @@ Active MoE parameters are estimates. The native format comes from `quantization_
 | Input | Control |
 |---|---|
 | Model | Search by name, family or architecture keyword |
-| Context | Doubling steps from 8k to 1M; extended and unsupported contexts are marked |
-| GPU | V100, L40S, H100, H200, GH200 (96 / 144 GB), B200, GB200, B300, GB300 |
+| Context | Any length (`200k`, `1.5M`, `131072`), doubling presets from 8k to 1M, and the model's native and extended limits; extended and unsupported contexts are marked |
+| GPU | A family, then a variant. NVIDIA data center: V100, A100 (SXM 40 / 80 GB, PCIe 80 GB), H100 (SXM, NVL), H200 (SXM, NVL), GH200 (96 / 144 GB), B200 (HGX, GB200 NVL72), B300 (HGX, GB300 NVL72). AMD data center: MI300X, MI325X, MI355X. PCIe: L4, A10 / A10G, L40S, RTX PRO 6000, RTX 4090, RTX 5090 |
 | GPU count | 1 to 8, then 16, 32, 64; 72 for NVL72 domains |
 | Parallelism | TP/PP with selectable TP degree (PP = GPU count / TP), or DP-attention + EP for MoE |
-| Engine | vLLM / llm-d or ZML / LLMD; both GPU and engine must support the format |
+| Engine | vLLM / llm-d, SGLang or ZML / LLMD; both GPU and engine must support the format |
 | Formats | BF16, FP16, FP8, INT8, INT4, MXFP4, NVFP4 weights; BF16, FP16, FP8, NVFP4 KV |
-| Reserve | Percentage of each GPU reserved for activations and CUDA graphs, similar to `--gpu-memory-utilization` |
-| Advanced | Visible memory per GPU from `nvidia-smi`, KV offload to CPU RAM |
+| Reserve | Percentage of each GPU left outside the engine: `1 − --gpu-memory-utilization` (vLLM) or `1 − --mem-fraction-static` (SGLang) |
+| Advanced | Visible memory per GPU from `nvidia-smi` / `amd-smi`, tokens per scheduling step, measured activation and runtime memory, KV offload to CPU RAM |
+| Workload | Average prompt and output tokens, request rate, TTFT and ITL targets, price per GPU-hour (Load and SLOs tab) |
 
 The URL stores the scenario settings for sharing. Models imported only into browser storage must also be available in the receiving browser.
 
@@ -260,7 +271,8 @@ The main indicators show model weights (total and per GPU), logical and replicat
 
 - Per-layer KV details, sessions at each context step and an indicative `vllm serve` command.
 - Estimated per-session and aggregate throughput, prefill time, memory/compute limits and CPU offload.
-- Inverse sizing: minimum GPU count and parallelism for a target session count, plus the maximum context on the current configuration.
+- Load and SLOs: concurrency needed against capacity at the average request length, TTFT, ITL, replicas, aggregated versus prefill/decode-disaggregated serving with the KV traffic between pools, cost per hour and per million tokens, and the cheapest instance shape on every card.
+- Inverse sizing: minimum GPU count and parallelism for a target session count, plus the maximum context on the current configuration. Both sizing tables filter by card group.
 - Up to six pinned scenarios for comparison, and a JSON export.
 
 Unsupported options are disabled with a reason on hover. Limited or unverified options remain selectable with warnings. Format choices adjust when switching model, GPU or engine, with a notice explaining the fallback. Warnings are ordered by severity.
@@ -276,6 +288,14 @@ Each profile declares weight and KV format support (`native`, `limited`, `unveri
 Capabilities use three states: `true`, `false`, or `unverified`. They cover KV paging, pool preallocation, prefix caching, continuous batching, sliding-window attention, block reclamation, TP, PP, DP-attention and offload. Paging and pool preallocation can coexist.
 
 Sliding-window memory savings require both `slidingWindowAttention: true` and `slidingWindowFreesBlocks: true`. Missing attention support is a blocking error because model outputs would be incorrect. Unverified block reclamation means allocating the full context.
+
+`vendorFormats` restricts formats for one GPU vendor within an engine, for example AWQ/GPTQ, which vLLM does not support on ROCm.
+
+`memory` describes how the engine sizes its KV pool. With `overheadInBudget: true` (vLLM), the memory fraction also pays for the profiled activation peak, non-PyTorch memory and CUDA graphs; with `false` (SGLang), `--mem-fraction-static` covers weights and KV only, and the overhead must fit in the reserve. `runtime` gives the scheduler defaults, optionally by GPU memory (`byMemory`); vLLM uses 16384 tokens per step and 1024 sequences from 160 GiB, 8192 / 1024 from 70 GiB except A100, and 2048 / 256 otherwise. `flags` provides the launch command and options for the indicative command line.
+
+### SGLang
+
+The profile follows SGLang 0.5.22: server arguments, quantization documentation and `memory_hook.py` for memory accounting. RadixAttention, the hybrid sliding-window pool, pipeline parallelism, DP-attention with expert parallelism (`--attn-dp-size`, `--ep-size`) and HiCache offloading are supported. The chunked-prefill size follows GPU memory (2048 to 16384 tokens). By default SGLang reserves at least 10 GiB outside its static fraction on GPUs above 60 GiB; a reserve smaller than the estimated activations raises a warning. The profile has medium confidence: it is sourced from documentation and code, not measured.
 
 ### ZML / LLMD
 
@@ -301,13 +321,16 @@ Pool preallocation, PP, DP-attention and offload remain unverified in this profi
 - TP shards KV heads and replicates them when TP exceeds their count. Each TP rank stores a full MLA latent.
 - PP uses whole layers and sizes for the most heavily loaded stage: ceil(layers / PP), selecting the most expensive cache layers because exact ordering is unknown. Input/output embeddings are included; tied embeddings are copied at both ends. PP greater than the decoder layer count is invalid.
 - DP-attention + EP shards only routed experts (`expertParamsB`). All non-expert tensors remain on every GPU at their respective precisions. Unknown expert parameter counts block capacity validation. Each request resides on one GPU.
+- Usable memory per GPU = visible memory − reserve − runtime overhead when the engine budget includes it (vLLM). Runtime overhead = max(activation peak, sampler logits) + fixed runtime memory + CUDA graphs. The activation peak covers one scheduling step of `maxNumBatchedTokens` tokens: the gated MLP's gate/up and activated outputs (3 × width × 2 bytes per token, sharded by TP) plus a few hidden-size buffers. The MLP width comes from the parameters per decoder layer (active experts for MoE). Sampler logits are `maxNumSeqs` × vocabulary × 4 bytes. A measured value from the engine's startup log can replace the estimate.
 - Sessions = floor((usable memory on the limiting GPU - its weights) / its KV per request). DP-attention sums the per-GPU session counts. Every session uses its full selected context; prefix reuse is ignored.
 - Total physical free KV memory = total usable memory - physical weights, including replicas. A separate conservative budget multiplies the limiting GPU's free memory by GPU count. This budget drives session capacity and is shown when it differs from physical free memory.
 - Model plus one KV reports physical usage, including replication. Its fit verdict uses the limiting GPU; a logical sum is also shown when different.
 - Recommendations exclude blocking format, parallelism, context and capacity errors. A visible-memory override applies only to its original GPU type.
 - Launch commands use the native repository or a format-specific `checkpoints` mapping. Missing checkpoints are explicitly marked as required input.
 - CPU offload parks queued, preempted or reusable sessions. It does not increase simultaneous decoding capacity. Reload time = per-GPU KV / CPU-to-GPU bandwidth.
-- Decode step time = max(bytes read / effective bandwidth, FLOPs / effective compute throughput) + collective latency. MoE reads account for experts touched by the batch. PP traverses stages. Prefill uses FLOPs including causal attention. See `performance` in the catalogue for efficiency assumptions.
+- Decode step time = max(bytes read / effective bandwidth, FLOPs / effective compute throughput) + collective latency. MoE reads account for experts touched by the batch. PP traverses stages. Prefill uses FLOPs including causal attention; one prompt runs on the GPUs of one PP stage. See `performance` in the catalogue for efficiency assumptions.
+- Workload (first order, no queueing): each request holds input + output/2 KV tokens on average, and concurrency is capped by that capacity and `maxNumSeqs`. Prefills take a share u = rate × prefill FLOPs / instance compute; compute-bound steps slow down by 1/(1 − u). TTFT = single-prompt prefill / (1 − u), ITL = step time at the solved concurrency, concurrency = rate × (TTFT + output × ITL) by Little's law. Replicas share the rate evenly. In prefill/decode disaggregation, the prefill pool runs prompts and sends their KV to the decode pool over `performance.networkGBsPerGpu`; the decode pool runs without prefill interference. Costs use `priceUsdPerHour` from the catalogue (indicative on-demand prices, October 2026) or the price entered for the selected card.
+- Not modelled: prefix-cache reuse, speculative decoding, LoRA adapters, vision/audio encoder activations, DeepSeek V4 compressor state, allocator fragmentation beyond the reserve, queueing before prefill, and network latency between prefill and decode pools. The report and the UI list these items.
 
 These are capacity and first-order performance estimates, not deployment benchmarks. Validate the chosen model, backend and hardware combination before relying on the result for production sizing.
 
@@ -337,6 +360,8 @@ Example model entry to add under `models` in a complete catalogue:
 
 Layer kinds are `full`, `sliding` (`window`), `mla` (`kvLoraRank`, `ropeHeadDim`, `extraBytesPerToken`, `kvShared`) and `linear` (`ssmElements`, `convElements`).
 
+GPU entries can set `family` and `variant` (picker grouping: the family is chosen first, then the variant), `segment` (`datacenter` or `pcie`), `vendor` (`nvidia` or `amd`), `interconnect.fabric` (the scale-up fabric name used in messages, `NVLink` by default) and `priceUsdPerHour`. `defaults.workload` sets the initial workload. All new fields are optional, so catalogues written for earlier versions still validate.
+
 Text shown in the interface (descriptions, notes, support notes, labels, GPU names) accepts either one string for both languages or one string per language:
 
 ```yaml
@@ -356,6 +381,6 @@ pnpm test
 pnpm run build
 ```
 
-Tests cover formulas, TP/PP/DP replication, offload, throughput, sizing, the 25 upstream configuration imports and a configuration matrix. GitHub Actions also builds and smoke-tests the production image.
+Tests cover formulas, TP/PP/DP replication, offload, runtime overhead, throughput, workload and disaggregated sizing, the JSON report, Hugging Face downloads (mocked), the upstream configuration imports and a configuration matrix. GitHub Actions also builds and smoke-tests the production image, including `/api/estimate` under the base path.
 
 Keep source comments, docstrings and Markdown artifacts in English. Write every new UI string and catalogue message in both French and English: `t("…", "…")` from `usePrefs()` in components, `tr(lang)` in `src/lib`, `{ fr, en }` in the configuration. Do not edit upstream configuration snapshots to translate external source data.

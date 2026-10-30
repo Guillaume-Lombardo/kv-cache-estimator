@@ -1,4 +1,4 @@
-import { CONTEXT_STEPS, isMoE, memoryFormatFor, type EstimateInput, type ParallelMode } from "./calc";
+import { MAX_CONTEXT, MIN_CONTEXT, isMoE, memoryFormatFor, type EstimateInput, type ParallelMode } from "./calc";
 import type { AppConfig, ModelSpec } from "./config-schema";
 import { tr, type Lang } from "./i18n";
 import { defaultTp, divisors, gpuCountOptions, pickKvFormat, pickWeightFormat } from "./planning";
@@ -19,16 +19,43 @@ export interface Scenario {
   memGiB?: number;
   /** CPU offload memory per GPU (GiB). */
   offloadGiB: number;
+  /** Tokens per scheduling step, if different from the engine default. */
+  batchedTokens?: number;
+  /** Runtime overhead per GPU (GiB) entered instead of the estimate. */
+  overheadGiB?: number;
+  /** Workload for the load and SLO analysis. */
+  workload: Workload;
+  /** Price per GPU-hour (USD) for the selected card, if different from the catalogue. */
+  priceUsd?: number;
 }
+
+export interface Workload {
+  /** Average prompt length, in tokens. */
+  inputTokens: number;
+  /** Average generated length, in tokens. */
+  outputTokens: number;
+  requestsPerSec: number;
+  /** Time-to-first-token target, in seconds. */
+  ttftSeconds: number;
+  /** Inter-token latency target, in milliseconds. */
+  itlMs: number;
+}
+
+export const DEFAULT_WORKLOAD: Workload = { inputTokens: 2000, outputTokens: 500, requestsPerSec: 2, ttftSeconds: 2, itlMs: 50 };
 
 export type QueryParams = Record<string, string | undefined>;
 
-export function nearestContext(tokens: number | undefined, fallback = 32768): number {
-  const t = tokens && tokens > 0 ? tokens : fallback;
-  return CONTEXT_STEPS.reduce((best, s) => (Math.abs(Math.log2(s / t)) < Math.abs(Math.log2(best / t)) ? s : best), CONTEXT_STEPS[0]);
+/** Context length within the accepted range, rounded to a whole token; the fallback when missing or invalid. */
+export function clampContext(tokens: number | undefined, fallback = 32768): number {
+  const t = tokens && tokens > 0 ? Math.round(tokens) : fallback;
+  return Math.min(MAX_CONTEXT, Math.max(MIN_CONTEXT, t));
 }
 
 const numParam = (v: string | undefined) => (v !== undefined && v !== "" && Number.isFinite(Number(v)) ? Number(v) : undefined);
+const positive = (v: string | undefined) => {
+  const n = numParam(v);
+  return n !== undefined && n > 0 ? n : undefined;
+};
 
 /** Build a valid scenario from potentially incomplete or outdated URL parameters. */
 export function scenarioFromQuery(cfg: AppConfig, models: ModelSpec[], q: QueryParams): Scenario {
@@ -47,9 +74,15 @@ export function scenarioFromQuery(cfg: AppConfig, models: ModelSpec[], q: QueryP
   const r = numParam(q.r);
   const mem = numParam(q.mem);
   const off = numParam(q.off);
+  const ovh = numParam(q.ovh);
+  const wd = { ...DEFAULT_WORKLOAD, ...d.workload };
+  const int = (v: string | undefined) => {
+    const n = positive(v);
+    return n === undefined ? undefined : Math.max(1, Math.round(n));
+  };
   return {
     modelId: model.id,
-    ctx: nearestContext(numParam(q.ctx), d.contextTokens),
+    ctx: clampContext(numParam(q.ctx), d.contextTokens),
     gpuId: gpu.id,
     engineId: engine.id,
     gpuCount,
@@ -60,6 +93,16 @@ export function scenarioFromQuery(cfg: AppConfig, models: ModelSpec[], q: QueryP
     reservePct: r !== undefined && r >= 0 && r <= 50 ? r : (d.reservePct ?? 10),
     memGiB: mem !== undefined && mem > 0 ? mem : undefined,
     offloadGiB: off !== undefined && off >= 0 ? off : 0,
+    batchedTokens: int(q.mbt),
+    overheadGiB: ovh !== undefined && ovh >= 0 ? ovh : undefined,
+    workload: {
+      inputTokens: int(q.in) ?? wd.inputTokens,
+      outputTokens: int(q.out) ?? wd.outputTokens,
+      requestsPerSec: positive(q.rps) ?? wd.requestsPerSec,
+      ttftSeconds: positive(q.ttft) ?? wd.ttftSeconds,
+      itlMs: positive(q.itl) ?? wd.itlMs,
+    },
+    priceUsd: positive(q.usd),
   };
 }
 
@@ -78,6 +121,15 @@ export function scenarioToQuery(s: Scenario): string {
   });
   if (s.memGiB) q.set("mem", String(s.memGiB));
   if (s.offloadGiB) q.set("off", String(s.offloadGiB));
+  if (s.batchedTokens) q.set("mbt", String(s.batchedTokens));
+  if (s.overheadGiB !== undefined) q.set("ovh", String(s.overheadGiB));
+  const w = s.workload;
+  q.set("in", String(w.inputTokens));
+  q.set("out", String(w.outputTokens));
+  q.set("rps", String(w.requestsPerSec));
+  q.set("ttft", String(w.ttftSeconds));
+  q.set("itl", String(w.itlMs));
+  if (s.priceUsd) q.set("usd", String(s.priceUsd));
   return q.toString();
 }
 
@@ -104,6 +156,8 @@ export function resolveScenario(cfg: AppConfig, models: ModelSpec[], s: Scenario
     reservePct: s.reservePct,
     memoryGiBOverride: s.memGiB,
     offloadGiBPerGpu: s.offloadGiB,
+    maxBatchedTokens: s.batchedTokens,
+    overheadGiBOverride: s.overheadGiB,
     lang,
   };
 }
@@ -121,16 +175,21 @@ export function launchCommand(input: EstimateInput, tp: number, pp: number): { t
   const repo = model.checkpoints[weightFormat.id] ?? (weightFormat.id === model.nativeWeightFormat ? model.source : undefined);
   const native = !!repo;
   const checkpoint = repo ?? t(`<checkpoint-${weightFormat.id}-de-${model.id}>`, `<checkpoint-${weightFormat.id}-of-${model.id}>`);
-  const parts = [`vllm serve ${checkpoint}`];
-  if (mode === "dp-ep" && f.dpAttention) parts.push(f.dpAttention.replace("N", String(gpuCount)));
+  // Profiles without `launch` describe vLLM-style options (catalogues written before it existed).
+  const legacy = !f.launch;
+  const parts = [`${f.launch ?? "vllm serve"} ${checkpoint}`];
+  if (mode === "dp-ep" && f.dpAttention) parts.push(f.dpAttention.replace(/\bN\b/g, String(gpuCount)));
   else {
     if (tp > 1) parts.push(`${f.tensorParallel} ${tp}`);
     if (pp > 1 && f.pipelineParallel) parts.push(`${f.pipelineParallel} ${pp}`);
   }
-  if (f.kvCacheDtype) parts.push(`${f.kvCacheDtype} ${kvFormat.id === "fp8" ? "fp8" : kvFormat.id === "nvfp4" ? "nvfp4" : "auto"}`);
+  if (f.kvCacheDtype) parts.push(`${f.kvCacheDtype} ${f.kvCacheDtypeValues[kvFormat.id] ?? (kvFormat.id === "fp8" ? "fp8" : kvFormat.id === "nvfp4" ? "nvfp4" : "auto")}`);
   if (f.memoryUtilization) parts.push(`${f.memoryUtilization} ${(1 - reservePct / 100).toFixed(2)}`);
-  parts.push(`--max-model-len ${contextTokens}`);
-  if (model.ssmStateBytes === 4) parts.push("--mamba-ssm-cache-dtype float32");
+  const maxModelLen = f.maxModelLen ?? (legacy ? "--max-model-len" : undefined);
+  if (maxModelLen) parts.push(`${maxModelLen} ${contextTokens}`);
+  if (input.maxBatchedTokens && f.maxNumBatchedTokens) parts.push(`${f.maxNumBatchedTokens} ${input.maxBatchedTokens}`);
+  const ssmFlag = f.mambaSsmCacheDtype ?? (legacy ? "--mamba-ssm-cache-dtype" : undefined);
+  if (model.ssmStateBytes === 4 && ssmFlag) parts.push(`${ssmFlag} float32`);
   const header = native
     ? ""
     : t(
