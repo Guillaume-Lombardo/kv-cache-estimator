@@ -35,6 +35,7 @@ export function ImportPanel({
   const result = preview?.[lang].result ?? null;
   const error = preview?.[lang].error ?? validationError;
   const [copied, setCopied] = useState(false);
+  const [fetching, setFetching] = useState(false);
 
   const convert = (raw = text) => {
     setCopied(false);
@@ -45,6 +46,27 @@ export function ImportPanel({
       paramsB: params ? Number(params) : undefined,
       activeParamsB: active ? Number(active) : undefined,
     }, existingIds));
+  };
+
+  /** Download config.json and the parameter count through the server (/api/hf-model). */
+  const fetchFromHub = async () => {
+    const repo = source.trim();
+    if (!repo) return;
+    setFetching(true);
+    setValidationError(null);
+    try {
+      const res = await fetch(`${process.env.KV_ESTIMATOR_PUBLIC_BASE_PATH ?? ""}/api/hf-model?repo=${encodeURIComponent(repo)}`);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+      const raw = JSON.stringify(body, null, 2);
+      setText(raw);
+      convert(raw);
+    } catch (e) {
+      setPreview(null);
+      setValidationError(t(`Téléchargement impossible : ${(e as Error).message}`, `Download failed: ${(e as Error).message}`));
+    } finally {
+      setFetching(false);
+    }
   };
 
   const onFile = async (f: File | undefined) => {
@@ -67,7 +89,28 @@ export function ImportPanel({
 
   return (
     <div>
-      <h3>{t("Importer un config.json", "Import a config.json")}</h3>
+      <h3>{t("Importer un modèle", "Import a model")}</h3>
+      <div className="inline-form hub-fetch">
+        <label htmlFor="hf-repo">{t("Dépôt Hugging Face", "Hugging Face repository")}</label>
+        <input
+          id="hf-repo"
+          type="text"
+          value={source}
+          onChange={(e) => setSource(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && fetchFromHub()}
+          placeholder="Qwen/Qwen3-8B"
+          spellCheck={false}
+        />
+        <button type="button" className="btn primary" onClick={fetchFromHub} disabled={!source.trim() || fetching}>
+          {fetching ? t("Téléchargement…", "Downloading…") : t("Récupérer", "Fetch")}
+        </button>
+      </div>
+      <p className="hint">
+        {t(
+          "Le serveur télécharge le config.json et le nombre de paramètres (safetensors) depuis huggingface.co. Dépôts restreints : définissez HF_TOKEN côté serveur. Sans accès réseau, collez le fichier ci-dessous.",
+          "The server downloads config.json and the parameter count (safetensors) from huggingface.co. Gated repositories: set HF_TOKEN on the server. Without network access, paste the file below.",
+        )}
+      </p>
       <p className="hint">
         {t("Collez le ", "Paste the ")}
         <code>config.json</code>
@@ -77,7 +120,9 @@ export function ImportPanel({
           " de Mistral). L'outil détecte l'architecture (GQA, fenêtre glissante, MLA, DSA, Mamba, DeltaNet, KDA), estime les paramètres si besoin et produit l'entrée YAML à ajouter au fichier de configuration. Équivalent en ligne de commande : ",
           "). The tool detects the architecture (GQA, sliding window, MLA, DSA, Mamba, DeltaNet, KDA), estimates the parameters if needed and produces the YAML entry to add to the configuration file. Command-line equivalent: ",
         )}
-        <code>pnpm run import-model config.json --append</code>.
+        <code>pnpm run import-model config.json --append</code>
+        {t(" ou ", " or ")}
+        <code>pnpm run import-model --hf org/nom</code>.
       </p>
       <div className="import-grid">
         <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder='{ "architectures": ["…"], "hidden_size": … }' spellCheck={false} rows={10} />
@@ -85,10 +130,6 @@ export function ImportPanel({
           <label>
             {t("Fichier", "File")}
             <input type="file" accept=".json,application/json" onChange={(e) => onFile(e.target.files?.[0])} />
-          </label>
-          <label>
-            {t("Dépôt (org/nom)", "Repository (org/name)")}
-            <input type="text" value={source} onChange={(e) => setSource(e.target.value)} placeholder="Qwen/Qwen3-8B" />
           </label>
           <label>
             {t("Paramètres totaux (B)", "Total parameters (B)")}

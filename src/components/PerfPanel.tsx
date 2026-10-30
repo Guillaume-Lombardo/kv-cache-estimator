@@ -47,17 +47,27 @@ export function PerfPanel({ input, est, perf }: { input: EstimateInput; est: Est
         <div className="perf-card">
           <span className="perf-label">{t(`Prefill de ${contextLabel(input.contextTokens)} tokens`, `Prefill of ${contextLabel(input.contextTokens)} tokens`)}</span>
           <strong>{fmt.duration(p.prefillSeconds)}</strong>
-          <span className="muted">{t(`1 requête, calcul ${p.computeLabel}`, `1 request, ${p.computeLabel} compute`)}</span>
+          <span className="muted">
+            {t(`1 requête, calcul ${p.computeLabel}`, `1 request, ${p.computeLabel} compute`)}
+            {est.pp > 1 ? t(` · ${est.tp} GPU${est.tp > 1 ? "s" : ""} (un étage PP)`, ` · ${est.tp} GPU${est.tp > 1 ? "s" : ""} (one PP stage)`) : ""}
+          </span>
         </div>
       </div>
       {rows.length > 1 && (
         <div className="table-wrap">
+          <p className="hint">
+            {t(
+              "Compromis débit par GPU / vitesse par utilisateur selon la concurrence (front de Pareto de cette configuration).",
+              "Trade-off between throughput per GPU and speed per user by concurrency (Pareto front of this configuration).",
+            )}
+          </p>
           <table className="table compact">
             <thead>
               <tr>
                 <th className="num">{t("Sessions actives", "Active sessions")}</th>
                 <th className="num">{t("tok/s par session", "tok/s per session")}</th>
                 <th className="num">{t("tok/s agrégés", "Aggregate tok/s")}</th>
+                <th className="num">{t("tok/s par GPU", "tok/s per GPU")}</th>
                 <th>{t("Limite", "Bound")}</th>
               </tr>
             </thead>
@@ -67,6 +77,7 @@ export function PerfPanel({ input, est, perf }: { input: EstimateInput; est: Est
                   <td className="num">{fmt.int(r.batch)}</td>
                   <td className="num">{fmt.rate(r.tokPerSecPerSession)}</td>
                   <td className="num">{fmt.rate(r.tokPerSecTotal)}</td>
+                  <td className="num">{fmt.rate(r.tokPerSecTotal / input.gpuCount)}</td>
                   <td className="muted">{boundLabel(r.bound)}</td>
                 </tr>
               ))}

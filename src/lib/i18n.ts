@@ -11,8 +11,8 @@ export const THEME_COOKIE = "kv-theme";
 
 export const TITLE = { fr: "Estimateur KV cache", en: "KV cache estimator" } as const;
 export const DESCRIPTION = {
-  fr: "Mémoire des poids et du KV cache des LLM open-weight sur GPU NVIDIA",
-  en: "Weight and KV cache memory for open-weight LLMs on NVIDIA GPUs",
+  fr: "Mémoire, débit et dimensionnement des LLM open-weight sur GPU NVIDIA et AMD",
+  en: "Memory, throughput and sizing for open-weight LLMs on NVIDIA and AMD GPUs",
 } as const;
 
 export const isLang = (v: unknown): v is Lang => LANGS.includes(v as Lang);

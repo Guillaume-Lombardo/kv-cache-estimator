@@ -12,12 +12,41 @@ import { tr, type Lang } from "./i18n";
 
 export const GIB = 1024 ** 3;
 
-/** 8k to 1M in doubling steps (powers of 2). */
+/** 8k to 1M in doubling steps (powers of 2): presets and chart rows. Any context length can be entered. */
 export const CONTEXT_STEPS = [8, 16, 32, 64, 128, 256, 512, 1024].map((k) => k * 1024);
 
+/** Accepted context lengths, in tokens. */
+export const MIN_CONTEXT = 256;
+export const MAX_CONTEXT = 16 * 1024 * 1024;
+
+/** Short label: binary units for multiples of 1024 (131072 → 128k), decimal otherwise (200000 → 200k). */
 export function contextLabel(tokens: number): string {
-  if (tokens >= 1024 * 1024) return `${+(tokens / (1024 * 1024)).toFixed(1)}M`;
-  return `${Math.round(tokens / 1024)}k`;
+  const binary = tokens % 1024 === 0;
+  const m = binary ? 1024 * 1024 : 1e6;
+  const k = binary ? 1024 : 1000;
+  if (tokens >= m) return `${+(tokens / m).toFixed(2)}M`;
+  if (tokens >= k) return `${+(tokens / k).toFixed(1)}k`;
+  return String(tokens);
+}
+
+/** "131072", "128k", "200 k", "1.5M", "1,5M" → tokens (k = 1024 when the result is whole, else 1000). */
+export function parseContext(text: string): number | null {
+  const m = text.trim().replace(",", ".").match(/^(\d+(?:\.\d+)?)\s*([kKmM]?)$/);
+  if (!m) return null;
+  const x = Number(m[1]);
+  const unit = m[2].toLowerCase();
+  if (!unit) return Math.round(x);
+  const binary = unit === "k" ? 1024 : 1024 * 1024;
+  const decimal = unit === "k" ? 1000 : 1e6;
+  // "128k" means 131072 (power-of-two contexts); "200k" with a fraction-free decimal reading stays 200000.
+  return Number.isInteger(x) && Number.isInteger(Math.log2(x)) ? x * binary : Math.round(x * decimal);
+}
+
+/** Preset context lengths up to `limit`, plus the model limits and `extra` values, sorted without duplicates. */
+export function contextCandidates(m: ModelSpec, extra: number[] = []): number[] {
+  const limit = m.maxContextExtended ?? m.maxContext;
+  const all = [...CONTEXT_STEPS.filter((t) => t <= limit), m.maxContext, ...(m.maxContextExtended ? [m.maxContextExtended] : []), ...extra];
+  return [...new Set(all)].sort((a, b) => a - b);
 }
 
 /** tp-pp: TP within a stage, PP across stages (tp = n: pure TP; tp = 1: pure PP). dp-ep: DP-attention + expert parallelism. */
@@ -43,12 +72,18 @@ export interface EstimateInput {
   memoryGiBOverride?: number;
   /** CPU memory dedicated to KV offload, per GPU. */
   offloadGiBPerGpu?: number;
+  /** Tokens per scheduling step (sizes the activation peak); engine default when omitted. */
+  maxBatchedTokens?: number;
+  /** Runtime overhead per GPU (activations, CUDA graphs, buffers) entered by the user, in GiB. */
+  overheadGiBOverride?: number;
   /** Language of the generated labels and messages (French by default). */
   lang?: Lang;
 }
 
 export type Severity = "error" | "warning" | "info";
 export interface Issue {
+  /** Stable machine-readable identifier (API, CLI, tests); title and detail are localized. */
+  code: string;
   severity: Severity;
   title: string;
   detail?: string;
@@ -103,6 +138,9 @@ export interface Estimate {
   memory: {
     gpuBytes: number;
     reservePerGpuBytes: number;
+    /** Activation peak, sampler logits, CUDA graphs and buffers, per GPU. */
+    overhead: RuntimeOverhead;
+    /** Memory for weights and KV on one GPU: total - reserve, minus the overhead when the engine budget includes it. */
     usablePerGpuBytes: number;
     freeForKvPerGpuBytes: number;
     /** Total physical free memory: N x usable memory minus physical weights, including replicas. */
@@ -140,10 +178,14 @@ export function combinedSupport(
   id: string,
   engineName: string,
   lang: Lang = "fr",
+  vendorMap: Record<string, Support> = {},
 ): Support {
   const t = tr(lang);
   const g = supportOf(gpuMap, id);
-  const e = supportOf(engineMap, id);
+  const ev = vendorMap[id];
+  const e0 = supportOf(engineMap, id);
+  // A vendor-specific engine entry can only restrict the engine's general support.
+  const e = ev && LEVEL_ORDER[ev.level] >= LEVEL_ORDER[e0.level] ? { ...e0, ...ev } : e0;
   const level = LEVEL_ORDER[g.level] >= LEVEL_ORDER[e.level] ? g.level : e.level;
   const engineNote =
     e.note ??
@@ -157,9 +199,15 @@ export function combinedSupport(
 }
 
 export const weightSupport = (gpu: GpuSpec, engine: EngineSpec, id: string, lang?: Lang) =>
-  combinedSupport(gpu.weightFormats, engine.weightFormats, id, engine.name, lang);
+  combinedSupport(gpu.weightFormats, engine.weightFormats, id, engine.name, lang, engine.vendorFormats[gpu.vendor]?.weightFormats);
 export const kvSupport = (gpu: GpuSpec, engine: EngineSpec, id: string, lang?: Lang) =>
-  combinedSupport(gpu.kvCacheFormats, engine.kvCacheFormats, id, engine.name, lang);
+  combinedSupport(gpu.kvCacheFormats, engine.kvCacheFormats, id, engine.name, lang, engine.vendorFormats[gpu.vendor]?.kvCacheFormats);
+
+/** Scheduler defaults of an engine on a GPU (memory tiers first, then the engine-wide values). */
+export function runtimeDefaults(engine: EngineSpec, gpu: GpuSpec, memoryGiB = gpu.memoryGiB): { maxNumBatchedTokens: number; maxNumSeqs: number } {
+  const tier = engine.runtime.byMemory.find((x) => memoryGiB >= x.minMemoryGiB && !x.exceptGpus.includes(gpu.id));
+  return tier ?? engine.runtime;
+}
 
 /** Actual GPU memory format for a given weight file. */
 export function memoryFormatFor(formats: WeightFormat[], gpu: GpuSpec, engine: EngineSpec, file: WeightFormat): WeightFormat {
@@ -202,6 +250,68 @@ export function totalLayers(m: ModelSpec): number {
 /** Decoder layers (used to distribute weights in PP). */
 export function decoderLayers(m: ModelSpec): number {
   return Math.max(m.numLayers ?? 0, totalLayers(m));
+}
+
+export interface RuntimeOverhead {
+  /** Forward-pass activation peak for one scheduling step of `batchedTokens` tokens. */
+  activationBytes: number;
+  /** Sampler logits for `maxNumSeqs` sequences (FP32). */
+  samplerBytes: number;
+  /** Fixed runtime memory and CUDA graphs. */
+  fixedBytes: number;
+  totalBytes: number;
+  batchedTokens: number;
+  /** Activation width per token of the widest MLP (active experts for MoE), estimated from parameter counts. */
+  mlpWidth: number;
+  /** Entered by the user instead of being estimated. */
+  overridden: boolean;
+  /** The engine's memory fraction covers it (vLLM); otherwise it must fit in the reserve (SGLang). */
+  inBudget: boolean;
+}
+
+/**
+ * Width of the MLP intermediate activation (gate + up halves counted once), estimated from the parameters
+ * per decoder layer: layer = attention (≈ 2 h²) + gated MLP (3 h I). For MoE, active parameters give
+ * the routed experts actually computed per token.
+ */
+export function mlpWidth(m: ModelSpec): number {
+  const h = m.hiddenSize;
+  const active = (m.activeParamsB ?? m.paramsB) * 1e9 - embeddingParams(m) - m.extraUnquantizedParamsB * 1e9;
+  const perLayer = active / decoderLayers(m);
+  return Math.max(h, (perLayer - 2 * h * h) / (3 * h));
+}
+
+/**
+ * First-order runtime overhead per GPU, the part of an engine's memory that is neither weights nor KV:
+ * - activation peak of one step of maxNumBatchedTokens tokens: gate/up output (2 I) and activated output (I)
+ *   in 16 bits, sharded by TP, plus a few hidden-size buffers;
+ * - sampler logits (maxNumSeqs × vocabulary × FP32), which peak separately from the forward pass;
+ * - fixed runtime memory and CUDA graphs from the engine profile.
+ */
+export function runtimeOverhead(input: EstimateInput, tp: number): RuntimeOverhead {
+  const { model: m, engine } = input;
+  const defaults = runtimeDefaults(engine, input.gpu, input.memoryGiBOverride);
+  const batchedTokens = input.maxBatchedTokens ?? defaults.maxNumBatchedTokens;
+  const inBudget = engine.memory.overheadInBudget;
+  const width = mlpWidth(m);
+  if (input.overheadGiBOverride !== undefined) {
+    const totalBytes = input.overheadGiBOverride * GIB;
+    return { activationBytes: 0, samplerBytes: 0, fixedBytes: totalBytes, totalBytes, batchedTokens, mlpWidth: width, overridden: true, inBudget };
+  }
+  const shard = input.mode === "dp-ep" ? 1 : tp;
+  const activationBytes = batchedTokens * ((6 * width) / shard + 8 * m.hiddenSize);
+  const samplerBytes = Math.min(defaults.maxNumSeqs, batchedTokens) * m.vocabSize * 4;
+  const fixedBytes = (engine.memory.fixedOverheadGiB + engine.memory.cudaGraphGiB) * GIB;
+  return {
+    activationBytes,
+    samplerBytes,
+    fixedBytes,
+    totalBytes: Math.max(activationBytes, samplerBytes) + fixedBytes,
+    batchedTokens,
+    mlpWidth: width,
+    overridden: false,
+    inBudget,
+  };
 }
 
 function groupLabel(g: LayerGroup, t: ReturnType<typeof tr>): string {
@@ -372,7 +482,8 @@ export function estimate(input: EstimateInput): Estimate {
   // --- Memory
   const gpuBytes = (input.memoryGiBOverride ?? gpu.memoryGiB) * GIB;
   const reservePerGpuBytes = gpuBytes * (input.reservePct / 100);
-  const usablePerGpuBytes = gpuBytes - reservePerGpuBytes;
+  const overhead = runtimeOverhead(input, tp);
+  const usablePerGpuBytes = gpuBytes - reservePerGpuBytes - (overhead.inBudget ? overhead.totalBytes : 0);
   const freeForKvPerGpuBytes = Math.max(0, usablePerGpuBytes - weightsPerGpu);
   const fitsWeights = weightsPerGpu <= usablePerGpuBytes;
 
@@ -402,6 +513,7 @@ export function estimate(input: EstimateInput): Estimate {
     memory: {
       gpuBytes,
       reservePerGpuBytes,
+      overhead,
       usablePerGpuBytes,
       freeForKvPerGpuBytes,
       freeForKvTotalBytes: Math.max(0, usablePerGpuBytes * n - (w.bytes + replicatedBytes)),
@@ -437,15 +549,17 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
   // --- Capacity
   if (!est.fitsWeights) {
     out.push({
+      code: "weights-do-not-fit",
       severity: "error",
       title: t("Les poids ne tiennent pas en mémoire", "The weights do not fit in memory"),
       detail: t(
-        `${gibText(est.weights.perGpuBytes)} de poids par GPU pour ${gibText(est.memory.usablePerGpuBytes)} utilisables. Ajoutez des GPUs, quantifiez davantage ou réduisez la réserve.`,
-        `${gibText(est.weights.perGpuBytes)} of weights per GPU for ${gibText(est.memory.usablePerGpuBytes)} usable. Add GPUs, quantize further or reduce the reserve.`,
+        `${gibText(est.weights.perGpuBytes)} de poids par GPU pour ${gibText(est.memory.usablePerGpuBytes)} utilisables${est.memory.overhead.inBudget ? ` (après ${gibText(est.memory.overhead.totalBytes)} d'activations et de runtime)` : ""}. Ajoutez des GPUs, quantifiez davantage ou réduisez la réserve.`,
+        `${gibText(est.weights.perGpuBytes)} of weights per GPU for ${gibText(est.memory.usablePerGpuBytes)} usable${est.memory.overhead.inBudget ? ` (after ${gibText(est.memory.overhead.totalBytes)} of activations and runtime)` : ""}. Add GPUs, quantize further or reduce the reserve.`,
       ),
     });
   } else if (est.sessions < 1) {
     out.push({
+      code: "no-room-for-one-request",
       severity: "error",
       title: t("Pas assez de mémoire pour une seule requête à ce contexte", "Not enough memory for a single request at this context"),
       detail: t(
@@ -454,17 +568,30 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       ),
     });
   }
+  const ov = est.memory.overhead;
+  if (!ov.inBudget && ov.totalBytes > est.memory.reservePerGpuBytes)
+    out.push({
+      code: "reserve-below-overhead",
+      severity: "warning",
+      title: t("Réserve inférieure aux activations estimées", "Reserve below the estimated activations"),
+      detail: t(
+        `${engine.name} prend activations et graphes CUDA hors de sa fraction mémoire : ${gibText(ov.totalBytes)} estimés pour ${gibText(est.memory.reservePerGpuBytes)} de réserve. Risque de manque de mémoire en charge : augmentez la réserve ou réduisez les tokens par étape.`,
+        `${engine.name} takes activations and CUDA graphs outside its memory fraction: ${gibText(ov.totalBytes)} estimated for a ${gibText(est.memory.reservePerGpuBytes)} reserve. Out-of-memory risk under load: increase the reserve or reduce the tokens per step.`,
+      ),
+    });
 
   // --- Engine
   const eg = engine.gpus[gpu.id];
   if (eg && eg.level !== "native")
     out.push({
+      code: "engine-gpu-support",
       severity: eg.level === "unsupported" ? "error" : "warning",
       title: t(`${engine.name} sur ${gpu.name} : ${LEVEL[eg.level]}`, `${engine.name} on ${gpu.name}: ${LEVEL[eg.level]}`),
       detail: eg.note,
     });
   if (engine.modelFamilies && !engine.modelFamilies.includes(m.family))
     out.push({
+      code: "model-family-not-advertised",
       severity: "warning",
       title: t(`Famille ${m.family} non annoncée par ${engine.name}`, `${m.family} family not advertised by ${engine.name}`),
       detail: t(
@@ -473,10 +600,11 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       ),
     });
   if (engine.confidence !== "high")
-    out.push({ severity: "warning", title: t(`Profil ${engine.name} partiellement vérifié`, `${engine.name} profile partially verified`), detail: engine.notes[0] });
+    out.push({ code: "engine-profile-partial", severity: "warning", title: t(`Profil ${engine.name} partiellement vérifié`, `${engine.name} profile partially verified`), detail: engine.notes[0] });
   const fe = engine.features;
   if (fe.kvPaging === false)
     out.push({
+      code: "kv-not-paged",
       severity: "info",
       title: t(`KV non paginé dans ${engine.name}`, `KV not paged in ${engine.name}`),
       detail: t(
@@ -486,12 +614,14 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
     });
   else if (fe.kvPaging === "unverified")
     out.push({
+      code: "kv-paging-unverified",
       severity: "info",
       title: t(`Pagination du KV non vérifiée dans ${engine.name}`, `KV paging not verified in ${engine.name}`),
       detail: t("Sans effet sur ce calcul, fait au contexte maximal pour chaque session.", "No effect on this calculation, which uses the maximum context for every session."),
     });
   if (fe.kvPoolPreallocated === "unverified")
     out.push({
+      code: "kv-pool-preallocation-unverified",
       severity: "info",
       title: t(`Préallocation du pool KV non vérifiée dans ${engine.name}`, `KV pool preallocation not verified in ${engine.name}`),
       detail: t(
@@ -503,11 +633,12 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
   // --- Formats vs GPU and engine
   const ws = weightSupport(gpu, engine, wf.id, lang);
   if (ws.level !== "native")
-    out.push({ severity: ws.level === "unsupported" ? "error" : "warning", title: t(`Poids ${wf.label} : ${LEVEL[ws.level]}`, `${wf.label} weights: ${LEVEL[ws.level]}`), detail: ws.note });
-  else if (ws.note) out.push({ severity: "info", title: t(`Poids ${wf.label}`, `${wf.label} weights`), detail: ws.note });
+    out.push({ code: "weight-format-support", severity: ws.level === "unsupported" ? "error" : "warning", title: t(`Poids ${wf.label} : ${LEVEL[ws.level]}`, `${wf.label} weights: ${LEVEL[ws.level]}`), detail: ws.note });
+  else if (ws.note) out.push({ code: "weight-format-note", severity: "info", title: t(`Poids ${wf.label}`, `${wf.label} weights`), detail: ws.note });
   const memFmt = input.memoryWeightFormat;
   if (memFmt && memFmt.id !== wf.id)
     out.push({
+      code: "weights-dequantized-at-load",
       severity: "info",
       title: t(`Fichier ${wf.label} chargé en ${memFmt.label} en mémoire`, `${wf.label} file loaded as ${memFmt.label} in memory`),
       detail: t(
@@ -518,6 +649,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
   else if (ws.level === "unverified" && wf.bitsPerParam < 16) {
     const bf16 = gibText(weightBytes(m, { ...wf, id: "bf16", bitsPerParam: 16 }).bytes);
     out.push({
+      code: "in-memory-format-unverified",
       severity: "info",
       title: t(`Format en mémoire non vérifié pour ${wf.label}`, `In-memory format not verified for ${wf.label}`),
       detail: t(
@@ -529,25 +661,27 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
 
   const ks = kvSupport(gpu, engine, kf.id, lang);
   if (ks.level !== "native")
-    out.push({ severity: ks.level === "unsupported" ? "error" : "warning", title: t(`KV cache ${kf.label} : ${LEVEL[ks.level]}`, `${kf.label} KV cache: ${LEVEL[ks.level]}`), detail: ks.note });
-  else if (ks.note) out.push({ severity: "info", title: t(`KV cache ${kf.label}`, `${kf.label} KV cache`), detail: ks.note });
+    out.push({ code: "kv-format-support", severity: ks.level === "unsupported" ? "error" : "warning", title: t(`KV cache ${kf.label} : ${LEVEL[ks.level]}`, `${kf.label} KV cache: ${LEVEL[ks.level]}`), detail: ks.note });
+  else if (ks.note) out.push({ code: "kv-format-note", severity: "info", title: t(`KV cache ${kf.label}`, `${kf.label} KV cache`), detail: ks.note });
 
   // --- Formats vs model
   const native = m.nativeWeightFormat;
   const wNote = m.weightFormatNotes[wf.id];
-  if (wNote) out.push({ severity: wNote.level === "unsupported" ? "error" : wNote.level, title: t(`${m.name} en ${wf.label}`, `${m.name} in ${wf.label}`), detail: wNote.note });
+  if (wNote) out.push({ code: "model-weight-format-note", severity: wNote.level === "unsupported" ? "error" : wNote.level, title: t(`${m.name} en ${wf.label}`, `${m.name} in ${wf.label}`), detail: wNote.note });
   const nativeFmt = weightFormats.find((f) => f.id === native);
   const nativeFmtBits = nativeFmt ? effectiveBits(m, nativeFmt) : undefined;
   // Same width (e.g. BF16 to FP16): conversion only, without quantization.
   if (wf.id !== native && nativeFmtBits !== wf.bitsPerParam) {
     if (nativeFmtBits !== undefined && wf.bitsPerParam > nativeFmtBits)
       out.push({
+        code: "weights-native-higher-precision",
         severity: "info",
         title: t(`Poids publiés nativement en ${nativeFmt?.label ?? native}`, `Weights natively published in ${nativeFmt?.label ?? native}`),
         detail: t(`Charger en ${wf.label} augmente la mémoire sans gain de qualité.`, `Loading in ${wf.label} increases memory without any quality gain.`),
       });
     else if (!m.officialWeightFormats.includes(wf.id))
       out.push({
+        code: "no-official-checkpoint",
         severity: "info",
         title: t(`Pas de checkpoint officiel en ${wf.label}`, `No official ${wf.label} checkpoint`),
         detail: t(
@@ -557,12 +691,13 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       });
   }
   const kNote = m.kvFormatNotes[kf.id];
-  if (kNote) out.push({ severity: kNote.level === "unsupported" ? "error" : kNote.level, title: t(`KV ${kf.label} avec ${m.name}`, `${kf.label} KV with ${m.name}`), detail: kNote.note });
+  if (kNote) out.push({ code: "model-kv-format-note", severity: kNote.level === "unsupported" ? "error" : kNote.level, title: t(`KV ${kf.label} avec ${m.name}`, `${kf.label} KV with ${m.name}`), detail: kNote.note });
 
   // --- Context
   if (ctx > m.maxContext) {
     if (m.maxContextExtended && ctx <= m.maxContextExtended)
       out.push({
+        code: "context-extended",
         severity: "warning",
         title: t(`Contexte au-delà du natif (${contextLabel(m.maxContext)})`, `Context beyond native (${contextLabel(m.maxContext)})`),
         detail: t(
@@ -572,6 +707,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       });
     else
       out.push({
+        code: "context-above-max",
         severity: "error",
         title: t(
           `Contexte supérieur au maximum du modèle (${contextLabel(m.maxContextExtended ?? m.maxContext)})`,
@@ -587,6 +723,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
     const f = engine.features;
     if (f.slidingWindowAttention === false)
       out.push({
+        code: "sliding-window-unsupported",
         severity: "error",
         title: t(`Attention glissante non supportée par ${engine.name}`, `Sliding-window attention not supported by ${engine.name}`),
         detail: t(
@@ -596,6 +733,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       });
     else if (slidingWindowSaves(engine))
       out.push({
+        code: "sliding-window-capped",
         severity: "info",
         title: t(`${cnt} couches à fenêtre glissante (${windowLabel(win)})`, `${cnt} sliding-window layers (${windowLabel(win)})`),
         detail: t(
@@ -605,6 +743,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       });
     else
       out.push({
+        code: "sliding-window-full-context",
         severity: "warning",
         title: t(`${cnt} couches à fenêtre glissante comptées au contexte complet`, `${cnt} sliding-window layers counted at full context`),
         detail: [
@@ -625,6 +764,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
   }
   if (m.layers.some((g) => g.kind === "linear"))
     out.push({
+      code: "linear-state",
       severity: "info",
       title: t("Couches linéaires / SSM : état récurrent constant", "Linear / SSM layers: constant recurrent state"),
       detail: t(
@@ -634,12 +774,14 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
     });
   if (m.layers.some((g) => g.kind === "mla" && (g.extraBytesPerToken ?? 0) > 0))
     out.push({
+      code: "dsa-indexer",
       severity: "info",
       title: t("Index d'attention parcimonieuse (DSA) inclus", "Sparse attention index (DSA) included"),
       detail: t("Clés de l'indexeur stockées en FP8 + échelle, en plus du latent.", "Indexer keys stored in FP8 + scale, in addition to the latent."),
     });
   if (m.layers.some((g) => g.kind === "full" && (g.extraBytesPerToken ?? 0) > 0))
     out.push({
+      code: "sparse-indexer",
       severity: "info",
       title: t("Index d'attention parcimonieuse inclus", "Sparse attention index included"),
       detail: t(
@@ -650,6 +792,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
   const compressed = m.layers.filter((g): g is Extract<LayerGroup, { kind: "compressed" }> => g.kind === "compressed");
   if (compressed.length)
     out.push({
+      code: "compressed-attention",
       severity: "info",
       title: t("Attention compressée : une entrée KV pour plusieurs tokens", "Compressed attention: one KV entry for several tokens"),
       detail: t(
@@ -659,11 +802,13 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
     });
 
   // --- Interconnect
+  const fab = gpu.interconnect.fabric;
   const linkName = (k: number) =>
-    gpu.interconnect.nvlink && k <= gpu.nvlinkDomain ? "NVLink" : k <= gpu.maxGpusPerNode ? gpu.interconnect.label : t("le réseau inter-nœuds", "the inter-node network");
+    gpu.interconnect.nvlink && k <= gpu.nvlinkDomain ? fab : k <= gpu.maxGpusPerNode ? (gpu.interconnect.nvlink ? "PCIe" : gpu.interconnect.label) : t("le réseau inter-nœuds", "the inter-node network");
   if (n > 1) {
     if (mode === "tp-pp" && tp > 1 && !gpu.interconnect.nvlink)
       out.push({
+        code: "tp-without-fabric",
         severity: "warning",
         title: t(`TP=${tp} sans NVLink sur ${gpu.name}`, `TP=${tp} without NVLink on ${gpu.name}`),
         detail: t(
@@ -673,15 +818,17 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       });
     if (mode === "tp-pp" && tp > 1 && gpu.interconnect.nvlink && tp > gpu.nvlinkDomain)
       out.push({
+        code: "tp-beyond-fabric-domain",
         severity: "warning",
-        title: t(`TP=${tp} dépasse le domaine NVLink (${gpu.nvlinkDomain})`, `TP=${tp} exceeds the NVLink domain (${gpu.nvlinkDomain})`),
+        title: t(`TP=${tp} dépasse le domaine ${fab} (${gpu.nvlinkDomain})`, `TP=${tp} exceeds the ${fab} domain (${gpu.nvlinkDomain})`),
         detail: t(
-          "Les all-reduce passent par le réseau. Gardez le TP dans le domaine NVLink et utilisez PP au-delà.",
-          "All-reduces go over the network. Keep TP within the NVLink domain and use PP beyond it.",
+          `Les all-reduce passent par ${linkName(tp)}. Gardez le TP dans le domaine ${fab} et utilisez PP au-delà.`,
+          `All-reduces go over ${linkName(tp)}. Keep TP within the ${fab} domain and use PP beyond it.`,
         ),
       });
     if (mode === "dp-ep" && n > Math.max(gpu.nvlinkDomain, 1) && n > gpu.maxGpusPerNode)
       out.push({
+        code: "inter-node-expert-parallel",
         severity: "info",
         title: t("Expert parallel inter-nœuds", "Inter-node expert parallel"),
         detail: t(
@@ -691,6 +838,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       });
     if (n > gpu.maxGpusPerNode)
       out.push({
+        code: "multi-node",
         severity: n > gpu.nvlinkDomain ? "warning" : "info",
         title: t(
           `${n} GPUs : ${Math.ceil(n / gpu.maxGpusPerNode)} nœuds de ${gpu.maxGpusPerNode} GPUs`,
@@ -698,7 +846,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
         ),
         detail:
           n <= gpu.nvlinkDomain
-            ? t(`Tous dans le même domaine NVLink (${gpu.nvlinkDomain} GPUs).`, `All in the same NVLink domain (${gpu.nvlinkDomain} GPUs).`)
+            ? t(`Tous dans le même domaine ${fab} (${gpu.nvlinkDomain} GPUs).`, `All in the same ${fab} domain (${gpu.nvlinkDomain} GPUs).`)
             : t(`Liaison entre nœuds par ${linkName(n)}.`, `Nodes linked by ${linkName(n)}.`),
       });
   }
@@ -709,6 +857,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       const v = engine.features[k];
       if (!used || v === true) return;
       out.push({
+        code: `${k === "tensorParallel" ? "tp" : "pp"}-${v === false ? "unsupported" : "unverified"}`,
         severity: v === false ? "error" : "warning",
         title: t(`${label} ${v === false ? "non supporté" : "non vérifié"} dans ${engine.name}`, `${label} ${v === false ? "not supported" : "not verified"} in ${engine.name}`),
         detail: engine.featureNotes[k],
@@ -719,6 +868,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
     cap("pipelineParallel", pp > 1, "Pipeline parallel");
     if (tp > 1 && m.attentionHeads % tp !== 0)
       out.push({
+        code: "tp-heads-not-divisible",
         severity: "error",
         title: t(
           `TP=${tp} impossible : ${m.attentionHeads} têtes d'attention non divisibles par ${tp}`,
@@ -730,12 +880,14 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       if (g.kind !== "full" && g.kind !== "sliding") continue;
       if (tp > 1 && g.kvHeads % tp !== 0 && tp % g.kvHeads !== 0)
         out.push({
+          code: "tp-kv-heads-incompatible",
           severity: "error",
           title: t(`TP=${tp} incompatible avec ${g.kvHeads} têtes KV`, `TP=${tp} incompatible with ${g.kvHeads} KV heads`),
           detail: t("Le nombre de têtes KV doit être multiple ou diviseur du degré de TP.", "The number of KV heads must be a multiple or a divisor of the TP degree."),
         });
       else if (tp > g.kvHeads) {
         out.push({
+          code: "kv-replicated-tp",
           severity: "warning",
           title: t(`KV répliqué ×${tp / g.kvHeads} (${g.kvHeads} têtes KV pour TP=${tp})`, `KV replicated ×${tp / g.kvHeads} (${g.kvHeads} KV heads for TP=${tp})`),
           detail: t(
@@ -749,6 +901,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
     if (tp > 1 && m.layers.some((g) => g.kind === "mla")) {
       const flag = engine.flags.dpAttention ? ` (${engine.flags.dpAttention})` : "";
       out.push({
+        code: "mla-replicated-tp",
         severity: "warning",
         title: t(`Cache MLA répliqué sur les ${tp} GPUs du TP`, `MLA cache replicated on the ${tp} TP GPUs`),
         detail: t(
@@ -761,12 +914,14 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       const L = decoderLayers(m);
       if (pp > L)
         out.push({
+          code: "pp-exceeds-layers",
           severity: "error",
           title: t(`PP=${pp} supérieur au nombre de couches (${L})`, `PP=${pp} greater than the number of layers (${L})`),
           detail: t("Chaque étage doit porter au moins une couche entière.", "Each stage must hold at least one whole layer."),
         });
       else if (L % pp !== 0)
         out.push({
+          code: "pp-uneven-stages",
           severity: "info",
           title: t(`PP=${pp} : jusqu'à ${est.layersPerStage} couches sur l'étage le plus chargé`, `PP=${pp}: up to ${est.layersPerStage} layers on the most loaded stage`),
           detail: t(
@@ -776,6 +931,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
         });
       if (m.tiedEmbeddings)
         out.push({
+          code: "pp-tied-embeddings",
           severity: "info",
           title: t("Embeddings liés en PP", "Tied embeddings with PP"),
           detail: t(
@@ -785,6 +941,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
         });
       if (n % tp !== 0)
         out.push({
+          code: "gpus-not-divisible-by-tp",
           severity: "error",
           title: t(`${n} GPUs non divisibles par TP=${tp}`, `${n} GPUs not divisible by TP=${tp}`),
           detail: t("TP × PP doit être égal au nombre de GPUs.", "TP × PP must equal the number of GPUs."),
@@ -793,9 +950,10 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
   }
   if (mode === "dp-ep") {
     if (engine.features.dpAttention === false)
-      out.push({ severity: "error", title: t(`DP-attention indisponible dans ${engine.name}`, `DP-attention unavailable in ${engine.name}`), detail: t("Choisissez TP/PP.", "Choose TP/PP.") });
+      out.push({ code: "dp-attention-unavailable", severity: "error", title: t(`DP-attention indisponible dans ${engine.name}`, `DP-attention unavailable in ${engine.name}`), detail: t("Choisissez TP/PP.", "Choose TP/PP.") });
     else if (engine.features.dpAttention === "unverified")
       out.push({
+        code: "dp-attention-unverified",
         severity: "warning",
         title: t(`DP-attention non vérifiée dans ${engine.name}`, `DP-attention not verified in ${engine.name}`),
         detail: engine.featureNotes.dpAttention ?? t("Aucune source ne confirme ce mode : résultat théorique.", "No source confirms this mode: theoretical result."),
@@ -803,12 +961,14 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       });
     if (!isMoE(m))
       out.push({
+        code: "dp-attention-dense-model",
         severity: "warning",
         title: t("DP-attention conçu pour les MoE", "DP-attention is designed for MoE models"),
         detail: t("Sur un modèle dense, cela revient à N répliques complètes.", "On a dense model, this amounts to N full replicas."),
       });
     else if (n > 1 && est.weights.dpUnvalidated)
       out.push({
+        code: "dp-attention-expert-params-unknown",
         severity: "error",
         title: t(`DP-attention : paramètres des experts inconnus pour ${m.name}`, `DP-attention: expert parameters unknown for ${m.name}`),
         detail: t(
@@ -818,6 +978,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
       });
     else if (n > 1)
       out.push({
+        code: "dp-attention-ep",
         severity: "info",
         title: "DP-attention + expert parallel",
         detail: t(
@@ -831,6 +992,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
   if ((input.offloadGiBPerGpu ?? 0) > 0) {
     if (engine.features.kvOffload === false)
       out.push({
+        code: "offload-unavailable",
         severity: "warning",
         title: t(`Offload KV non disponible dans ${engine.name}`, `KV offload unavailable in ${engine.name}`),
         detail: t("La mémoire CPU saisie n'est pas comptée.", "The CPU memory entered is not counted."),
@@ -838,12 +1000,14 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
     else {
       if (engine.features.kvOffload === "unverified")
         out.push({
+          code: "offload-unverified",
           severity: "warning",
           title: t(`Offload KV non vérifié dans ${engine.name}`, `KV offload not verified in ${engine.name}`),
           detail: engine.featureNotes.kvOffload ?? t("Sessions en réserve théoriques.", "Parked sessions are theoretical."),
         });
       const reload = `${Math.round(est.offload.reloadMs)} ms`;
       out.push({
+        code: "offload-parked",
         severity: "info",
         title: t(`Offload CPU : ${est.offload.parkedSessions} sessions en réserve`, `CPU offload: ${est.offload.parkedSessions} parked sessions`),
         detail: t(
@@ -856,6 +1020,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
 
   if (m.confidence !== "high")
     out.push({
+      code: "model-architecture-confidence",
       severity: m.confidence === "low" ? "warning" : "info",
       title: t(
         `Architecture de ${m.name} à vérifier (fiabilité ${m.confidence === "low" ? "faible" : "moyenne"})`,

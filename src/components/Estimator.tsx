@@ -11,6 +11,7 @@ import {
   isMoE,
   isValidTp,
   kvSupport,
+  runtimeDefaults,
   supportLevelLabel,
   weightSupport,
   type ParallelMode,
@@ -18,20 +19,25 @@ import {
 import { localize, type Lang } from "@/lib/i18n";
 import { estimatePerf } from "@/lib/perf";
 import { defaultTp, divisors, gpuCountOptions, maxTp, pickKvFormat, pickWeightFormat } from "@/lib/planning";
+import { buildReport, UNMODELLED } from "@/lib/report";
 import { launchCommand, resolveScenario, scenarioFromQuery, scenarioToQuery, type QueryParams, type Scenario } from "@/lib/scenario";
 import { ChipGroup, type ChipOption } from "./ChipGroup";
 import { ComparePanel } from "./ComparePanel";
+import { ContextInput } from "./ContextInput";
+import { GpuPicker } from "./GpuPicker";
 import { ImportPanel } from "./ImportPanel";
 import { IMPORTED_FAMILY, ModelCombobox } from "./ModelCombobox";
 import { IssuesPanel, Kpi, KvBreakdown, MemoryBar, ModelCard, SessionsChart } from "./panels";
 import { PerfPanel } from "./PerfPanel";
 import { PrefsToggles, usePrefs } from "./Prefs";
 import { SizingPanel, type SizingChoice } from "./SizingPanel";
+import { WorkloadPanel } from "./WorkloadPanel";
 
 const STORAGE = { pinned: "kv-estimator:pinned", imported: "kv-estimator:imported", tab: "kv-estimator:tab" };
 const TABS = [
   { id: "detail", fr: "Détail", en: "Detail" },
   { id: "perf", fr: "Débit", en: "Throughput" },
+  { id: "workload", fr: "Charge et SLO", en: "Load and SLOs" },
   { id: "sizing", fr: "Dimensionnement", en: "Sizing" },
   { id: "compare", fr: "Comparaison", en: "Comparison" },
   { id: "import", fr: "Importer un modèle", en: "Import a model" },
@@ -155,7 +161,7 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
         notice(`Mémoire visible personnalisée (${s.memGiB} Gio) réinitialisée pour ${g.name}.`, `Custom visible memory (${s.memGiB} GiB) reset for ${g.name}.`),
       );
     setNotices(msgs);
-    setS({ ...s, gpuId: id, gpuCount: n, tp: defaultTp(model, g, n), ...f, memGiB: undefined });
+    setS({ ...s, gpuId: id, gpuCount: n, tp: defaultTp(model, g, n), ...f, memGiB: undefined, priceUsd: undefined });
   };
   const setEngine = (id: string) => {
     const e = config.engines.find((x) => x.id === id)!;
@@ -186,7 +192,7 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
         ? [notice("Mémoire visible personnalisée réinitialisée (autre carte).", "Custom visible memory reset (different card).")]
         : []),
     ]);
-    setS({ ...s, ...c, memGiB: sameGpu ? s.memGiB : undefined });
+    setS({ ...s, ...c, memGiB: sameGpu ? s.memGiB : undefined, priceUsd: sameGpu ? s.priceUsd : undefined });
   };
 
   const pin = () => {
@@ -227,7 +233,10 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
   /** Blocking error (format, parallelism, context, etc.): keep the figures but do not mark them as successful. */
   const blocking = issues.some((i) => i.severity === "error");
   const perf = useMemo(() => estimatePerf(input, est, config.performance), [input, est, config.performance]);
-  const byContext = useMemo(() => CONTEXT_STEPS.map((t) => ({ t, e: estimate({ ...input, contextTokens: t }) })), [input]);
+  const byContext = useMemo(() => {
+    const steps = [...new Set([...CONTEXT_STEPS, ctx])].sort((a, b) => a - b);
+    return steps.map((t) => ({ t, e: estimate({ ...input, contextTokens: t }) }));
+  }, [input, ctx]);
   const command = launchCommand(input, est.tp, est.pp);
 
   // --- Options
@@ -257,28 +266,16 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
       title: [f.description, sup.level !== "native" ? supportLevelLabel(sup.level, lang) : null, sup.note].filter(Boolean).join("\n"),
     };
   });
-  const gpuOptions: ChipOption[] = config.gpus.map((g) => ({
-    id: g.id,
-    label: g.name,
-    sub: (
-      <>
-        {g.memoryLabel.split(" (")[0]}
-        <br />
-        <span className={g.interconnect.nvlink ? "" : "no-link"}>{g.interconnect.nvlink ? (g.nvlinkDomain > 8 ? "NVL72" : "NVLink") : t("sans NVLink GPU↔GPU", "no GPU↔GPU NVLink")}</span>
-      </>
-    ),
-    title: `${g.architecture} (sm ${g.computeCapability}) · ${g.memoryLabel} · ${g.bandwidthTBs} ${t("To/s", "TB/s")} · ${g.interconnect.label}`,
-  }));
   const countOptions: ChipOption[] = gpuCountOptions(config, gpu).map((n) => {
     const reasons: string[] = [];
-    if (n > 1 && !gpu.interconnect.nvlink) reasons.push(t("pas de NVLink", "no NVLink"));
+    if (n > 1 && !gpu.interconnect.nvlink) reasons.push(t("pas de liaison GPU↔GPU dédiée", "no dedicated GPU↔GPU link"));
     if (n > gpu.maxGpusPerNode) reasons.push(t(`${Math.ceil(n / gpu.maxGpusPerNode)} nœuds`, `${Math.ceil(n / gpu.maxGpusPerNode)} nodes`));
     const sameDomain = gpu.interconnect.nvlink && n <= gpu.nvlinkDomain;
     return {
       id: String(n),
       label: String(n),
       warn: n > 1 && (!gpu.interconnect.nvlink || (n > gpu.maxGpusPerNode && !sameDomain)),
-      title: [reasons.join(" · "), sameDomain && n > gpu.maxGpusPerNode ? t("même domaine NVLink", "same NVLink domain") : ""].filter(Boolean).join(" — ") || undefined,
+      title: [reasons.join(" · "), sameDomain && n > gpu.maxGpusPerNode ? t(`même domaine ${gpu.interconnect.fabric}`, `same ${gpu.interconnect.fabric} domain`) : ""].filter(Boolean).join(" — ") || undefined,
     };
   });
   const modeOptions: ChipOption[] = [
@@ -308,7 +305,7 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
         ? t(`${model.attentionHeads} têtes d'attention / têtes KV non divisibles par ${d}`, `${model.attentionHeads} attention heads / KV heads not divisible by ${d}`)
         : crosses
           ? gpu.interconnect.nvlink
-            ? t("TP au-delà du domaine NVLink", "TP beyond the NVLink domain")
+            ? t(`TP au-delà du domaine ${gpu.interconnect.fabric}`, `TP beyond the ${gpu.interconnect.fabric} domain`)
             : t("TP au-delà du domaine du serveur", "TP beyond the server")
           : d > 1 && !gpu.interconnect.nvlink
             ? t("TP via PCIe : lent", "TP over PCIe: slow")
@@ -354,36 +351,12 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
   };
 
   const maxCtx = model.maxContextExtended ?? model.maxContext;
+  const ov = est.memory.overhead;
   const replicated = est.kv.perRequestClusterBytes > est.kv.perRequestBytes * 1.001;
   const memGiB = s.memGiB ?? gpu.memoryGiB;
 
   const exportJson = () => {
-    const data = {
-      generatedAt: new Date().toISOString(),
-      url: window.location.href,
-      scenario: s,
-      model: { id: model.id, name: model.name, source: model.source, revision: model.revision },
-      gpu: { id: gpu.id, name: gpu.name, memoryGiB: memGiB },
-      engine: engine.name,
-      parallelism: { mode: s.mode, tp: est.tp, pp: est.pp, gpuCount: s.gpuCount },
-      results: {
-        weightsGiB: est.weights.totalBytes / GIB,
-        weightsPerGpuGiB: est.weights.perGpuBytes / GIB,
-        kvPerRequestGiB: est.kv.perRequestBytes / GIB,
-        kvPerRequestClusterGiB: est.kv.perRequestClusterBytes / GIB,
-        modelPlusOneKvGiB: est.modelPlusOneKvBytes / GIB,
-        freeKvPhysicalTotalGiB: est.memory.freeForKvTotalBytes / GIB,
-        kvBudgetTotalGiB: est.memory.kvBudgetTotalBytes / GIB,
-        valid: !blocking,
-        sessions: est.sessions,
-        offloadParkedSessions: est.offload.parkedSessions,
-        decodeTokPerSecSingle: perf.single.tokPerSecPerSession,
-        decodeTokPerSecFullLoad: perf.full?.tokPerSecTotal ?? null,
-        prefillSeconds: perf.prefillSeconds,
-      },
-      issues,
-      command: command?.text ?? null,
-    };
+    const data = { generatedAt: new Date().toISOString(), url: window.location.href, ...buildReport(config, models, s, lang) };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -423,52 +396,11 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
             <ModelCard model={model} />
           </div>
 
-          <div className="field">
-            <label className="field-label" htmlFor="ctx">
-              {t("Fenêtre de contexte", "Context window")} <strong className="value">{contextLabel(ctx)}</strong>
-              <span className="muted"> ({fmt.int(ctx)} tokens)</span>
-            </label>
-            <input
-              id="ctx"
-              type="range"
-              min={0}
-              max={CONTEXT_STEPS.length - 1}
-              step={1}
-              value={CONTEXT_STEPS.indexOf(ctx)}
-              onChange={(e) => update({ ctx: CONTEXT_STEPS[Number(e.target.value)] })}
-              className={ctx > maxCtx ? "range-error" : ctx > model.maxContext ? "range-warn" : ""}
-            />
-            <div className="ticks">
-              {CONTEXT_STEPS.map((step) => (
-                <button
-                  key={step}
-                  type="button"
-                  className={`tick${step === ctx ? " current" : ""}${step > maxCtx ? " over" : step > model.maxContext ? " ext" : ""}`}
-                  onClick={() => update({ ctx: step })}
-                  title={
-                    step > maxCtx
-                      ? t("Au-delà du maximum du modèle", "Beyond the model maximum")
-                      : step > model.maxContext
-                        ? t("Nécessite une extension RoPE (YaRN)", "Requires a RoPE extension (YaRN)")
-                        : undefined
-                  }
-                >
-                  {contextLabel(step)}
-                </button>
-              ))}
-            </div>
-            <p className="hint">
-              {t("Natif : ", "Native: ")}
-              {contextLabel(model.maxContext)}
-              {model.maxContextExtended && <>{t(` · étendu (YaRN) : ${contextLabel(model.maxContextExtended)}`, ` · extended (YaRN): ${contextLabel(model.maxContextExtended)}`)}</>}
-              <span className="legend-ext"> ■ extension</span>
-              <span className="legend-over"> ■ {t("hors limite", "out of range")}</span>
-            </p>
-          </div>
+          <ContextInput model={model} value={ctx} onChange={(v) => update({ ctx: v })} />
 
           <div className="field">
             <label className="field-label">{t("Type de carte", "Card type")}</label>
-            <ChipGroup label={t("Type de carte", "Card type")} options={gpuOptions} value={s.gpuId} onChange={setGpu} className="gpu-grid" />
+            <GpuPicker gpus={config.gpus} value={s.gpuId} onChange={setGpu} />
             {gpu.notes.length > 0 && (
               <ul className="gpu-notes">
                 {gpu.notes.map((n) => (
@@ -533,12 +465,14 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
 
           <div className="field">
             <label className="field-label" htmlFor="reserve">
-              {t("Réserve mémoire par GPU", "Memory reserve per GPU")} <strong className="value">{t(`${s.reservePct} %`, `${s.reservePct}%`)}</strong>
+              {t("Réserve hors moteur par GPU", "Reserve outside the engine per GPU")} <strong className="value">{t(`${s.reservePct} %`, `${s.reservePct}%`)}</strong>
               <span className="muted"> ({fmt.bytes(est.memory.reservePerGpuBytes)})</span>
             </label>
             <input id="reserve" type="range" min={0} max={30} step={1} value={s.reservePct} onChange={(e) => update({ reservePct: Number(e.target.value) })} />
             <p className="hint">
-              {t("Activations, graphes CUDA, contexte CUDA, fragmentation.", "Activations, CUDA graphs, CUDA context, fragmentation.")}
+              {ov.inBudget
+                ? t("Mémoire laissée hors du moteur : contexte CUDA, autres processus, fragmentation.", "Memory left outside the engine: CUDA context, other processes, fragmentation.")
+                : t("Mémoire hors de la fraction statique du moteur : activations, graphes CUDA, contexte CUDA.", "Memory outside the engine's static fraction: activations, CUDA graphs, CUDA context.")}
               {engine.flags.memoryUtilization && (
                 <>
                   {" "}
@@ -546,9 +480,21 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
                 </>
               )}
             </p>
+            <p className={`hint${!ov.inBudget && ov.totalBytes > est.memory.reservePerGpuBytes ? " lim-lim" : ""}`}>
+              {t("Activations et runtime", "Activations and runtime")} <strong>{fmt.bytes(ov.totalBytes)}</strong>
+              {ov.overridden
+                ? t(" (valeur saisie)", " (entered value)")
+                : t(
+                    ` (pic d'activations ${fmt.bytes(ov.activationBytes)} pour ${fmt.int(ov.batchedTokens)} tokens par étape, logits ${fmt.bytes(ov.samplerBytes)}, fixe ${fmt.bytes(ov.fixedBytes)})`,
+                    ` (activation peak ${fmt.bytes(ov.activationBytes)} for ${fmt.int(ov.batchedTokens)} tokens per step, logits ${fmt.bytes(ov.samplerBytes)}, fixed ${fmt.bytes(ov.fixedBytes)})`,
+                  )}
+              {ov.inBudget
+                ? t(`, pris dans la fraction de ${engine.name}.`, `, taken from ${engine.name}'s fraction.`)
+                : t(", à couvrir par la réserve.", ", to be covered by the reserve.")}
+            </p>
           </div>
 
-          <details className="field advanced" open={s.memGiB !== undefined || s.offloadGiB > 0}>
+          <details className="field advanced" open={s.memGiB !== undefined || s.offloadGiB > 0 || s.batchedTokens !== undefined || s.overheadGiB !== undefined}>
             <summary className="field-label">{t("Options avancées", "Advanced options")}</summary>
             <label className="inline-form">
               <span>{t("Mémoire visible par GPU", "Visible memory per GPU")}</span>
@@ -560,7 +506,31 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
                 placeholder={String(gpu.memoryGiB)}
                 onChange={(e) => update({ memGiB: e.target.value ? Number(e.target.value) : undefined })}
               />
-              <span className="muted">{t("Gio (nvidia-smi MiB ÷ 1024)", "GiB (nvidia-smi MiB ÷ 1024)")}</span>
+              <span className="muted">{t(`Gio (${gpu.vendor === "amd" ? "amd-smi" : "nvidia-smi"} MiB ÷ 1024)`, `GiB (${gpu.vendor === "amd" ? "amd-smi" : "nvidia-smi"} MiB ÷ 1024)`)}</span>
+            </label>
+            <label className="inline-form">
+              <span>{t("Tokens par étape", "Tokens per step")}</span>
+              <input
+                type="number"
+                min={256}
+                step={1024}
+                value={s.batchedTokens ?? ""}
+                placeholder={String(runtimeDefaults(engine, gpu, s.memGiB).maxNumBatchedTokens)}
+                onChange={(e) => update({ batchedTokens: Number(e.target.value) > 0 ? Math.round(Number(e.target.value)) : undefined })}
+              />
+              <span className="muted">{engine.flags.maxNumBatchedTokens ?? t("prefill fractionné", "chunked prefill")}</span>
+            </label>
+            <label className="inline-form">
+              <span>{t("Activations et runtime mesurés", "Measured activations and runtime")}</span>
+              <input
+                type="number"
+                min={0}
+                step={0.1}
+                value={s.overheadGiB ?? ""}
+                placeholder={(est.memory.overhead.overridden ? 0 : est.memory.overhead.totalBytes / GIB).toFixed(1)}
+                onChange={(e) => update({ overheadGiB: e.target.value === "" ? undefined : Math.max(0, Number(e.target.value)) })}
+              />
+              <span className="muted">{t("Gio par GPU (remplace l'estimation)", "GiB per GPU (replaces the estimate)")}</span>
             </label>
             <label className="inline-form">
               <span>{t("Offload KV vers la RAM CPU", "KV offload to CPU RAM")}</span>
@@ -726,6 +696,16 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
                 </>
               )}
               {tab === "perf" && <PerfPanel input={input} est={est} perf={config.performance} />}
+              {tab === "workload" && (
+                <WorkloadPanel
+                  config={config}
+                  input={input}
+                  workload={s.workload}
+                  priceUsd={s.priceUsd}
+                  onChange={(workload, priceUsd) => update({ workload, priceUsd })}
+                  onApply={applySizing}
+                />
+              )}
               {tab === "sizing" && <SizingPanel config={config} input={input} onApply={applySizing} />}
               {tab === "compare" && (
                 <ComparePanel config={config} models={models} current={s} pinned={pinned} onPin={pin} onRemove={unpin} onLoad={loadScenario} />
@@ -741,6 +721,12 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
             <ul>
               {ASSUMPTIONS.map((a) => (
                 <li key={a.en}>{a[lang]}</li>
+              ))}
+            </ul>
+            <h3>{t("Non modélisé", "Not modelled")}</h3>
+            <ul className="unmodelled">
+              {UNMODELLED[lang].map((u) => (
+                <li key={u}>{u}</li>
               ))}
             </ul>
           </details>
@@ -780,8 +766,12 @@ const ASSUMPTIONS: Notice[] = [
     "DP-attention + EP: attention replicated on every GPU, experts sharded, each request on a single GPU.",
   ),
   notice(
-    "Sessions = ⌊mémoire libre par GPU ÷ KV par requête et par GPU⌋, toutes au contexte maximal (pire cas). Prefix caching et blocs partiels ignorés.",
-    "Sessions = ⌊free memory per GPU ÷ KV per request per GPU⌋, all at maximum context (worst case). Prefix caching and partial blocks ignored.",
+    "Mémoire du moteur = mémoire visible − réserve. vLLM y prend aussi le pic d'activations (tokens par étape × largeur MLP estimée), les logits de l'échantillonneur et un fixe runtime ; SGLang les prend dans la réserve.",
+    "Engine memory = visible memory − reserve. vLLM also takes the activation peak (tokens per step × estimated MLP width), sampler logits and a fixed runtime amount from it; SGLang takes them from the reserve.",
+  ),
+  notice(
+    "Sessions = ⌊mémoire libre par GPU ÷ KV par requête et par GPU⌋, toutes au contexte maximal (pire cas). L'onglet Charge et SLO utilise la longueur moyenne des requêtes.",
+    "Sessions = ⌊free memory per GPU ÷ KV per request per GPU⌋, all at maximum context (worst case). The Load and SLOs tab uses the average request length.",
   ),
   notice(
     "Offload CPU : le KV déchargé ne sert qu'aux sessions en attente ou préemptées, il n'augmente pas la concurrence de décodage.",

@@ -99,17 +99,25 @@ export function MemoryBar({ est, gpuCount }: { est: Estimate; gpuCount: number }
   const { t, fmt } = usePrefs();
   const gpuBytes = est.memory.gpuBytes;
   const reserve = est.memory.reservePerGpuBytes;
+  const ov = est.memory.overhead;
+  // vLLM-style engines take the overhead from their own fraction; SGLang-style engines from the reserve.
+  const overheadShown = ov.inBudget ? ov.totalBytes : Math.min(ov.totalBytes, reserve);
   const kvUsed = est.sessionsPerGpu * est.kv.perRequestPerGpuBytes;
   const free = est.memory.freeForKvPerGpuBytes - kvUsed;
-  const overflow = Math.max(0, est.weights.perGpuBytes - (gpuBytes - reserve));
+  const overflow = Math.max(0, est.weights.perGpuBytes - est.memory.usablePerGpuBytes);
   const scale = gpuBytes + overflow;
   const pct = (b: number) => `${(Math.max(0, b) / scale) * 100}%`;
   const segs = [
-    { key: "weights", label: t("Poids", "Weights"), bytes: Math.min(est.weights.perGpuBytes, gpuBytes - reserve) },
+    { key: "weights", label: t("Poids", "Weights"), bytes: Math.min(est.weights.perGpuBytes, Math.max(0, est.memory.usablePerGpuBytes)) },
     { key: "overflow", label: t("Dépassement", "Overflow"), bytes: overflow },
     { key: "kv", label: `KV (${fmt.int(est.sessionsPerGpu)} session${est.sessionsPerGpu > 1 ? "s" : ""})`, bytes: kvUsed },
     { key: "free", label: t("Libre (< 1 session)", "Free (< 1 session)"), bytes: free },
-    { key: "reserve", label: t("Réserve", "Reserve"), bytes: reserve },
+    {
+      key: "overhead",
+      label: ov.overridden ? t("Activations et runtime (saisi)", "Activations and runtime (entered)") : t("Activations et runtime", "Activations and runtime"),
+      bytes: overheadShown,
+    },
+    { key: "reserve", label: t("Réserve", "Reserve"), bytes: ov.inBudget ? reserve : reserve - overheadShown },
   ].filter((s) => s.bytes > 0);
   return (
     <div className="panel">
