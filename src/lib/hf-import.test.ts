@@ -82,6 +82,13 @@ describe("convertHfConfig", async () => {
     ]);
   });
 
+  it("sums per-block experts of NAS-pruned MoE (Nemotron 3.5 Bolt)", () => {
+    const json = JSON.parse(readFileSync(path.join(upstream, "nvidia__NVIDIA-Nemotron-3.5-Bolt-74B-A9B-BF16.json"), "utf8"));
+    const { model } = convertHfConfig(json);
+    expect(model.expertParamsB).toBeGreaterThan(66.1 * 0.95);
+    expect(model.expertParamsB).toBeLessThan(66.1 * 1.05);
+  });
+
   it("recognizes ModelOpt mixed-precision NVFP4 checkpoints", () => {
     const json = JSON.parse(readFileSync(path.join(upstream, "mistralai__Mistral-Large-4-1T-A52B.json"), "utf8"));
     json.config.quantization_config = {

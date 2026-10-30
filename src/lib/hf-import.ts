@@ -178,12 +178,21 @@ function estimateParams(t: Json, groups: LayerGroup[], tied: boolean, linearPara
   const mlpMul = t.mlp_hidden_act === "relu2" ? 2 : 3; // relu squared: no gate
   const dense = denseLayers * mlpMul * H * inter;
   const perExpert = mlpMul * expertHidden * moeInter;
-  const routed = moeLayers * experts * perExpert;
+  let routed = moeLayers * experts * perExpert;
+  let routedActive = moeLayers * topk * perExpert;
+  let router = moeLayers * experts * H;
+  // NAS-pruned MoE (Nemotron 3.5 Bolt): expert count, size and top-k vary per block.
+  const moeBlocks = Array.isArray(t.block_configs) ? (t.block_configs as Json[]).filter((b) => b.block_type === "moe" && num(b.n_routed_experts)) : [];
+  if (moeBlocks.length) {
+    const per = (b: Json) => mlpMul * expertHidden * (num(b.moe_intermediate_size) ?? moeInter);
+    routed = moeBlocks.reduce((s, b) => s + (num(b.n_routed_experts) as number) * per(b), 0);
+    routedActive = moeBlocks.reduce((s, b) => s + (num(b.num_experts_per_tok) ?? topk) * per(b), 0);
+    router = moeBlocks.reduce((s, b) => s + (num(b.n_routed_experts) as number) * H, 0);
+  }
   const sharedP = moeLayers * shared * mlpMul * H * sharedInter;
-  const router = moeLayers * experts * H;
 
   const total = embeddings + attention + dense + routed + sharedP + router;
-  const active = embeddings + attention + dense + moeLayers * topk * perExpert + sharedP + router;
+  const active = embeddings + attention + dense + routedActive + sharedP + router;
   return { total, active, routed, embeddings };
 }
 
