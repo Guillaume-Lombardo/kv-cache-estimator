@@ -83,7 +83,7 @@ export function buildReport(cfg: AppConfig, models: ModelSpec[], s: Scenario, la
         ttftSeconds: finite(wl.single.ttftSeconds),
         itlMs: finite(wl.single.itlMs),
         prefillUtil: wl.single.prefillUtil,
-        meetsTargets: wl.single.ok,
+        meetsTargets: !wl.infeasible && wl.single.ok,
       },
       aggregated: wl.aggregated && {
         replicas: wl.aggregated.replicas,

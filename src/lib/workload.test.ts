@@ -107,7 +107,8 @@ describe("workload", async () => {
   });
 
   it("splits the rate over the fewest replicas that meet every target", () => {
-    const a = analyzeWorkload(cfg, inputFor({ model: "qwen3-32b", gpu: "h100" }), { ...w, requestsPerSec: 4 });
+    // 16k: one 32k request no longer fits on one H100 next to the BF16 weights and runtime overhead.
+    const a = analyzeWorkload(cfg, inputFor({ model: "qwen3-32b", gpu: "h100", ctx: "16384" }), { ...w, requestsPerSec: 4 });
     const agg = a.aggregated!;
     expect(agg.load.ok).toBe(true);
     expect(agg.gpus).toBe(agg.replicas);
@@ -122,7 +123,7 @@ describe("workload", async () => {
   });
 
   it("sizes prefill and decode pools separately for P/D disaggregation", () => {
-    const a = analyzeWorkload(cfg, inputFor({ model: "qwen3-32b", gpu: "h100" }), { ...w, requestsPerSec: 8 });
+    const a = analyzeWorkload(cfg, inputFor({ model: "qwen3-32b", gpu: "h100", ctx: "16384" }), { ...w, requestsPerSec: 8 });
     const d = a.disaggregated!;
     expect(d.prefillReplicas).toBeGreaterThanOrEqual(1);
     expect(d.decodeReplicas).toBeGreaterThanOrEqual(1);
@@ -268,5 +269,37 @@ describe("engine catalogue", async () => {
     const titles = collectIssues(input, estimate(input), cfg.weightFormats).map((i) => i.title).join(" ");
     expect(titles).toContain("Infinity Fabric");
     expect(titles).not.toContain("NVLink");
+  });
+});
+
+describe("workload validity", async () => {
+  const cfg = await load();
+  const inputFor = (q: QueryParams) => resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { n: "1", ...q }), "en")!;
+
+  it("rejects a load whose concurrency has not settled instead of returning an early iterate", () => {
+    // Qwen3-0.6B on one B200: the fixed point lies beyond the KV capacity; early iterates sit far below it.
+    const w: Workload = { inputTokens: 2000, outputTokens: 2000, requestsPerSec: 8.1, ttftSeconds: 100, itlMs: 1000 };
+    const a = analyzeWorkload(cfg, inputFor({ model: "qwen3-0.6b", gpu: "b200" }), w);
+    expect(a.single.ok).toBe(false);
+    expect(a.single.over.memory).toBe(true);
+    expect(a.aggregated!.replicas).toBeGreaterThan(1);
+  });
+
+  it("does not plan deployments for a configuration with blocking errors", () => {
+    const w: Workload = { inputTokens: 2000, outputTokens: 500, requestsPerSec: 1, ttftSeconds: 2, itlMs: 50 };
+    // 32 attention heads cannot be split over TP 3.
+    const a = analyzeWorkload(cfg, inputFor({ model: "qwen3-8b", gpu: "h100", n: "3", tp: "3" }), w);
+    expect(a.infeasible).toBe("invalid-config");
+    expect(a.aggregated).toBeNull();
+    expect(a.disaggregated).toBeNull();
+    const r = buildReport(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", gpu: "h100", n: "3", tp: "3" }), "en")!;
+    expect(r.workload.singleInstance.meetsTargets).toBe(false);
+  });
+
+  it("blocks SGLang configurations whose reserve cannot hold the activations", () => {
+    const input = inputFor({ model: "qwen3-8b", gpu: "h100", eng: "sglang", r: "0" });
+    const issue = collectIssues(input, estimate(input), cfg.weightFormats).find((i) => i.code === "reserve-below-overhead");
+    expect(issue?.severity).toBe("error");
+    expect(buildReport(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", gpu: "h100", eng: "sglang", n: "1", r: "0" }), "en")!.results.valid).toBe(false);
   });
 });

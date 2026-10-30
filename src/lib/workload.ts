@@ -50,7 +50,7 @@ export interface InstanceModel {
   promptCapacity: number;
 }
 
-export type Infeasible = "request-exceeds-context" | "no-memory" | "ttft-unreachable" | "itl-unreachable";
+export type Infeasible = "invalid-config" | "request-exceeds-context" | "no-memory" | "ttft-unreachable" | "itl-unreachable";
 
 export function instanceModel(cfg: AppConfig, input: EstimateInput, w: Workload): InstanceModel {
   const n = input.gpuCount;
@@ -86,15 +86,18 @@ export function instanceLoad(m: InstanceModel, w: Workload, rps: number, withPre
   }
   const ttftSeconds = withPrefill ? m.singlePrefillSeconds / (1 - u) : 0;
   const stepS = (c: number) => m.perf.at(Math.max(1, Math.ceil(c)), u).stepMs / 1000;
+  // Iterates rise monotonically to the smallest fixed point. Stop once they pass the capacity; a load that
+  // has not settled after many steps sits at the edge of stability and is rejected.
   let c = rps * (ttftSeconds + w.outputTokens * stepS(1));
-  for (let i = 0; i < 60; i++) {
+  let converged = false;
+  for (let i = 0; i < 2000 && c <= m.capacity; i++) {
     const next = rps * (ttftSeconds + w.outputTokens * stepS(c));
-    const done = Math.abs(next - c) <= 1e-3 * Math.max(1, c);
+    converged = Math.abs(next - c) <= 1e-3 * Math.max(1, c);
     c = next;
-    if (done || c > 1e7) break;
+    if (converged) break;
   }
   const itlMs = stepS(c) * 1000;
-  const over = { memory: c > m.capacity, prefill: false, ttft: ttftSeconds > w.ttftSeconds, itl: itlMs > w.itlMs };
+  const over = { memory: !converged || c > m.capacity, prefill: false, ttft: ttftSeconds > w.ttftSeconds, itl: itlMs > w.itlMs };
   return { ...base, concurrency: c, ttftSeconds, itlMs, over, ok: !over.memory && !over.ttft && !over.itl };
 }
 
@@ -165,7 +168,9 @@ export function costOf(gpus: number, price: number | undefined, w: Workload): Co
 }
 
 /** Why the workload cannot be served with this instance whatever the replica count, if so. */
-function infeasibility(m: InstanceModel, w: Workload): Infeasible | null {
+function infeasibility(cfg: AppConfig, m: InstanceModel, w: Workload): Infeasible | null {
+  const input = m.input;
+  if (collectIssues(input, estimate(input), cfg.weightFormats).some((i) => i.severity === "error")) return "invalid-config";
   if (w.inputTokens + w.outputTokens > m.input.contextTokens) return "request-exceeds-context";
   if (m.capacity < 1) return "no-memory";
   if (m.singlePrefillSeconds > w.ttftSeconds) return "ttft-unreachable";
@@ -204,7 +209,7 @@ function disaggregate(cfg: AppConfig, m: InstanceModel, w: Workload): Disaggrega
 export function analyzeWorkload(cfg: AppConfig, input: EstimateInput, w: Workload, priceUsdPerHour = input.gpu.priceUsdPerHour): WorkloadAnalysis {
   const m = instanceModel(cfg, input, w);
   const single = instanceLoad(m, w, w.requestsPerSec);
-  const infeasible = infeasibility(m, w);
+  const infeasible = infeasibility(cfg, m, w);
   let aggregated: AggregatedPlan | null = null;
   let disaggregated: DisaggregatedPlan | null = null;
   if (!infeasible) {

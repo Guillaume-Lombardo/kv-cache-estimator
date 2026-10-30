@@ -10,6 +10,10 @@ import { usePrefs } from "./Prefs";
 import type { SizingChoice } from "./SizingPanel";
 
 const INFEASIBLE: Record<Infeasible, { fr: string; en: string }> = {
+  "invalid-config": {
+    fr: "La configuration actuelle a des erreurs bloquantes (voir les avertissements) : corrigez-la avant d'estimer la charge.",
+    en: "The current configuration has blocking errors (see the warnings): fix it before estimating the load.",
+  },
   "request-exceeds-context": {
     fr: "Une requête moyenne (prompt + sortie) dépasse le contexte maximal configuré.",
     en: "An average request (prompt + output) exceeds the configured maximum context.",

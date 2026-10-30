@@ -572,7 +572,7 @@ export function collectIssues(input: EstimateInput, est: Estimate, weightFormats
   if (!ov.inBudget && ov.totalBytes > est.memory.reservePerGpuBytes)
     out.push({
       code: "reserve-below-overhead",
-      severity: "warning",
+      severity: "error",
       title: t("Réserve inférieure aux activations estimées", "Reserve below the estimated activations"),
       detail: t(
         `${engine.name} prend activations et graphes CUDA hors de sa fraction mémoire : ${gibText(ov.totalBytes)} estimés pour ${gibText(est.memory.reservePerGpuBytes)} de réserve. Risque de manque de mémoire en charge : augmentez la réserve ou réduisez les tokens par étape.`,
