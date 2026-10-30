@@ -166,6 +166,18 @@ const layerGroupSchema = z.discriminatedUnion("kind", [
     convElements: z.number().int().nonnegative().default(0),
     label: text.optional(),
   }),
+  z.strictObject({
+    /** Compressed attention (DeepSeek V4 CSA/HCA): one shared K=V vector per stored entry. */
+    kind: z.literal("compressed"),
+    count: z.number().int().positive(),
+    headDim: z.number().int().positive(),
+    /** Context tokens pooled into one stored entry. Omitted: the layer keeps only its window (or reads another layer's entries). */
+    compressRatio: z.number().int().positive().optional(),
+    /** Most recent tokens kept uncompressed by every layer. */
+    window: z.number().int().positive(),
+    /** Additional bytes per compressed entry (sparse indexer keys), independent of the KV format. */
+    extraBytesPerEntry: z.number().nonnegative().optional(),
+  }),
 ]);
 export type LayerGroup = Localized<z.output<typeof layerGroupSchema>>;
 
@@ -201,6 +213,8 @@ export const modelSchema = z.strictObject({
   nativeWeightFormat: z.string(),
   /** Effective bits in the native checkpoint if different from the generic format (e.g. INT4 g32 = 4.5). */
   nativeBitsPerParam: z.number().positive().optional(),
+  /** Effective bits of the native checkpoint's quantized non-expert weights when the experts use fewer (e.g. FP8 next to FP4 experts). */
+  nativeNonExpertBitsPerParam: z.number().positive().optional(),
   officialWeightFormats: z.array(z.string()).default([]),
   /** Official checkpoint repository per format (native format uses source). */
   checkpoints: z.record(z.string(), z.string()).default({}),

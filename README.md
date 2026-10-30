@@ -227,6 +227,8 @@ Without `--append`, the command prints YAML. With `--append`, it adds the entry 
 
 The converter recognizes GQA/MHA, sliding windows (`layer_types`, `hybrid_layer_pattern`, `sliding_window_pattern`), Llama 4 chunked attention, MLA and DSA indexers (including IndexShare and pooling), cross-layer KV sharing (`kv_source_layers`), Mamba-2, Gated DeltaNet, KDA, NAS-pruned `block_configs`, and Mistral's `params.json` structure.
 
+It also recognizes DeepSeek V4 compressed attention (`compress_ratios`, including V4.1 shared compressed caches) and Nemotron-H `layers_block_type`.
+
 Parameter counts use this priority:
 
 1. The explicit `--params` option.
@@ -234,7 +236,7 @@ Parameter counts use this priority:
 3. An estimate from architecture dimensions: attention, MLPs, experts and linear layers.
 4. The repository name when a dimension-based estimate is unreliable, for example with packed tensors.
 
-Active MoE parameters are estimates. The native format comes from `quantization_config`; SSM state uses FP32 when the configuration requires it (`mamba_ssm_cache_dtype`). The 25 upstream snapshots include source revisions. Tests check that the converter reproduces the catalogue's layer definitions for each snapshot.
+Active MoE parameters are estimates. The native format comes from `quantization_config`; SSM state uses FP32 when the configuration requires it (`mamba_ssm_cache_dtype`). The 42 upstream snapshots include source revisions. Tests check that the converter reproduces the catalogue's layer definitions for each snapshot.
 
 ## Inputs
 
@@ -290,11 +292,12 @@ Pool preallocation, PP, DP-attention and offload remain unverified in this profi
 
 ## Calculation model
 
-- Weights use parameter counts and effective bits, including quantization scales (for example INT4 g128 = 4.25 bits and NVFP4 = 4.5 bits). Embeddings, lm_head and designated unquantized parameters stay at 16 bits. `nativeBitsPerParam` handles specific native checkpoints, such as Kimi K2.5 INT4 g32 at 4.5 bits.
+- Weights use parameter counts and effective bits, including quantization scales (for example INT4 g128 = 4.25 bits and NVFP4 = 4.5 bits). Embeddings, lm_head and designated unquantized parameters stay at 16 bits. `nativeBitsPerParam` handles specific native checkpoints, such as Kimi K2.5 INT4 g32 at 4.5 bits. `nativeNonExpertBitsPerParam` keeps the other quantized weights at their own precision when a native checkpoint quantizes only the experts further, such as DeepSeek V4 (FP4 experts, FP8 elsewhere); DP-attention replicates them at that precision.
 - GQA/MHA KV = layers x KV heads x (K dimension + V dimension) x bytes x tokens.
 - Sliding-window KV is capped only when the engine both applies the window and frees expired blocks.
 - MLA KV = layers x (latent rank + RoPE dimension) x bytes x tokens, plus DSA indexer storage and scales where applicable. Layers that read an earlier layer's latent (cross-layer KV sharing, `kvShared`) store only their indexer keys.
 - Linear/SSM cache is recurrent state plus convolution state, constant per request. `ssmStateBytes` can require FP32.
+- Compressed attention (DeepSeek V4 CSA/HCA, `compressed` layers) stores one shared K = V vector per `compressRatio` tokens, plus the most recent `window` tokens uncompressed and the sparse indexer keys per compressed entry (`extraBytesPerEntry`). TP replicates it like an MLA latent. The compressors' FP32 state is not counted.
 - TP shards KV heads and replicates them when TP exceeds their count. Each TP rank stores a full MLA latent.
 - PP uses whole layers and sizes for the most heavily loaded stage: ceil(layers / PP), selecting the most expensive cache layers because exact ordering is unknown. Input/output embeddings are included; tied embeddings are copied at both ends. PP greater than the decoder layer count is invalid.
 - DP-attention + EP shards only routed experts (`expertParamsB`). All non-expert tensors remain on every GPU at their respective precisions. Unknown expert parameter counts block capacity validation. Each request resides on one GPU.
@@ -342,7 +345,7 @@ notes:
   - { fr: "Licence Mistral Research (usage commercial soumis à accord).", en: "Mistral Research License (commercial use requires an agreement)." }
 ```
 
-The catalogue contains 65 models across Mistral, Z.ai (GLM), Moonshot (Kimi), Xiaomi (MiMo), Qwen, NVIDIA, Google (Gemma), DeepSeek, OpenAI (gpt-oss) and Meta (Llama). Entries with a verified configuration revision have upstream snapshots in `config/upstream/`, originally collected on `feat/kv-cache-estimator`. Other entries use public architecture information with a `confidence` level (`high`, `medium`, `low`); the UI marks medium and low confidence. Some active parameter counts, including Kimi K3, GLM-5.3 and MiMo-V2.6-Pro, are estimates.
+The catalogue contains 91 models across Mistral, Z.ai (GLM), Moonshot (Kimi), Xiaomi (MiMo), Qwen, NVIDIA, Google (Gemma), DeepSeek, OpenAI (gpt-oss), Meta (Llama and Muse), MiniMax, Reflection AI, Aleph Alpha, StepFun, Meituan (LongCat), inclusionAI (Ling), Tencent (Hunyuan), Baidu (ERNIE), Cohere, IBM (Granite) and Microsoft (Phi). Entries with a verified configuration revision have upstream snapshots in `config/upstream/`, originally collected on `feat/kv-cache-estimator`. Other entries use public architecture information with a `confidence` level (`high`, `medium`, `low`); the UI marks medium and low confidence. Some active parameter counts, including Kimi K3, GLM-5.3, MiMo-V2.6-Pro and Ring-2.6-1T, are estimates. Muse Spark Open's official repository is gated, so its architecture comes from a public republication of its `config.json`.
 
 ## Development checks
 

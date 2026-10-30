@@ -46,6 +46,9 @@ function decodeFlopsPerToken(input: EstimateInput): number {
     } else if (g.kind === "mla") {
       // Absorbed MLA: scores and outputs in latent space.
       attn += 2 * g.count * m.attentionHeads * (2 * g.kvLoraRank + g.ropeHeadDim) * ctx;
+    } else if (g.kind === "compressed") {
+      // Shared K = V entries: compressed entries plus the uncompressed window.
+      attn += 4 * g.count * m.attentionHeads * g.headDim * storedTokens(g, ctx, engine);
     } else {
       attn += 4 * g.count * g.ssmElements;
     }
@@ -66,6 +69,8 @@ function prefillFlops(input: EstimateInput): number {
     } else if (g.kind === "mla") {
       // Unabsorbed prefill: K (nope + rope) and V heads, approximately 256 + rope.
       attn += 2 * g.count * m.attentionHeads * (256 + g.ropeHeadDim) * ((ctx * ctx) / 2);
+    } else if (g.kind === "compressed") {
+      attn += 4 * g.count * m.attentionHeads * g.headDim * ((ctx * storedTokens(g, ctx, engine)) / 2);
     } else {
       attn += 4 * g.count * g.ssmElements * ctx;
     }
