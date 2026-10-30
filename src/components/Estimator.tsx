@@ -396,10 +396,7 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
             <ModelCard model={model} />
           </div>
 
-          <ContextInput model={model} value={ctx} onChange={(v) => update({ ctx: v })} />
-
           <div className="field">
-            <label className="field-label">{t("Type de carte", "Card type")}</label>
             <GpuPicker gpus={config.gpus} value={s.gpuId} onChange={setGpu} />
             {gpu.notes.length > 0 && (
               <ul className="gpu-notes">
@@ -462,6 +459,8 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
             <ChipGroup label={t("Format du KV cache", "KV cache format")} options={kvOptions} value={s.kf} onChange={(v) => update({ kf: v })} />
             {limitationLine(config.kvCacheFormats.map((f) => ({ label: f.label, s: kvSupport(gpu, engine, f.id, lang) })))}
           </div>
+
+          <ContextInput model={model} value={ctx} onChange={(v) => update({ ctx: v })} />
 
           <div className="field">
             <label className="field-label" htmlFor="reserve">
