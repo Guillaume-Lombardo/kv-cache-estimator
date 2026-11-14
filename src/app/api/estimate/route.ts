@@ -17,5 +17,6 @@ export async function GET(request: Request) {
   const cfg = localize(result.config, lang);
   const unknown = unknownIdentifiers(cfg, cfg.models, q);
   if (unknown.length) return Response.json({ error: "unknown identifiers", unknown }, { status: 400 });
-  return Response.json(buildReport(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, q), lang));
+  const { scenario, adjustments } = scenarioFromQuery(cfg, cfg.models, q);
+  return Response.json(buildReport(cfg, cfg.models, scenario, lang, adjustments));
 }

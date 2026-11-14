@@ -25,7 +25,8 @@ async function main() {
     console.error(`Unknown identifiers: ${unknown.join(", ")}`);
     process.exit(2);
   }
-  console.log(JSON.stringify(buildReport(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, q), lang), null, 2));
+  const { scenario, adjustments } = scenarioFromQuery(cfg, cfg.models, q);
+  console.log(JSON.stringify(buildReport(cfg, cfg.models, scenario, lang, adjustments), null, 2));
 }
 
 main();

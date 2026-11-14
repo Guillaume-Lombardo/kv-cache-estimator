@@ -28,7 +28,7 @@ describe("i18n", async () => {
   it("messages follow the language of the input", () => {
     const issues = (lang: "fr" | "en") => {
       const cfg = localize(source, lang);
-      const s = scenarioFromQuery(cfg, cfg.models, { model: "qwen3-32b", gpu: "h100" });
+      const s = scenarioFromQuery(cfg, cfg.models, { model: "qwen3-32b", gpu: "h100" }).scenario;
       const input = resolveScenario(cfg, cfg.models, { ...s, gpuCount: 3, mode: "tp-pp", tp: 3 }, lang) as EstimateInput;
       return collectIssues(input, estimate(input), cfg.weightFormats);
     };

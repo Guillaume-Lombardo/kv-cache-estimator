@@ -2,7 +2,7 @@ import { collectIssues, estimate, GIB } from "./calc";
 import type { AppConfig, ModelSpec } from "./config-schema";
 import type { Lang } from "./i18n";
 import { estimatePerf } from "./perf";
-import { launchCommand, resolveScenario, type Scenario } from "./scenario";
+import { launchCommand, resolveScenario, type Scenario, type ScenarioAdjustment } from "./scenario";
 import { analyzeWorkload } from "./workload";
 
 /** Items the estimate leaves out, reported with every result. */
@@ -33,7 +33,7 @@ const gib = (b: number) => b / GIB;
 const finite = (x: number) => (Number.isFinite(x) ? x : null);
 
 /** Machine-readable result of a scenario: JSON export, /api/estimate and the CLI. Null if an identifier is unknown. */
-export function buildReport(cfg: AppConfig, models: ModelSpec[], s: Scenario, lang: Lang) {
+export function buildReport(cfg: AppConfig, models: ModelSpec[], s: Scenario, lang: Lang, adjustments: ScenarioAdjustment[] = []) {
   const input = resolveScenario(cfg, models, s, lang);
   if (!input) return null;
   const est = estimate(input);
@@ -44,6 +44,7 @@ export function buildReport(cfg: AppConfig, models: ModelSpec[], s: Scenario, la
   const ov = est.memory.overhead;
   return {
     scenario: s,
+    adjustments,
     model: { id: input.model.id, name: input.model.name, source: input.model.source, revision: input.model.revision },
     gpu: { id: input.gpu.id, name: input.gpu.name, memoryGiB: gib(est.memory.gpuBytes) },
     engine: input.engine.name,
@@ -111,7 +112,7 @@ export function buildReport(cfg: AppConfig, models: ModelSpec[], s: Scenario, la
 }
 export type Report = NonNullable<ReturnType<typeof buildReport>>;
 
-/** Identifiers in the query that the catalogue does not know (the UI falls back silently; the API and CLI refuse). */
+/** Identifiers in the query that the catalogue does not know (the UI reports fallbacks; the API and CLI refuse). */
 export function unknownIdentifiers(cfg: AppConfig, models: ModelSpec[], q: Record<string, string | undefined>): string[] {
   const checks: [string, { id: string }[]][] = [
     ["model", models],
