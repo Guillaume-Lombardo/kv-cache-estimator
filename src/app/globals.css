@@ -234,6 +234,10 @@ h2 {
 .hardware-settings { display: flex; flex-direction: column; gap: 12px; }
 .hardware-settings:not([open]) > :not(summary) { display: none; }
 .hardware-settings > summary { margin-bottom: 0; }
+/* Details groups their content in an internal box: put field gaps on an explicit wrapper. */
+.hardware-fields, .advanced-fields { display: flex; flex-direction: column; }
+.hardware-fields { gap: 20px; }
+.advanced-fields { gap: 12px; }
 
 .field {
   display: flex;
@@ -1343,6 +1347,7 @@ h3 {
 }
 @media (width < 960px) {
   .tabs { flex-wrap: wrap; }
+  html { scroll-padding-bottom: calc(112px + env(safe-area-inset-bottom)); }
   .page { padding-bottom: calc(112px + env(safe-area-inset-bottom)); }
   .result-summary-anchor { position: static; }
   .result-summary, .result-summary-anchor[data-visible="false"] .result-summary {
