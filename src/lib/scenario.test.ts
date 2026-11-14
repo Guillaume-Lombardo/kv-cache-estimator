@@ -90,12 +90,16 @@ describe("link normalization", async () => {
     expect(parse(Object.fromEntries(new URLSearchParams(scenarioToQuery(parsed.scenario))))).toEqual(parsed);
   });
 
-  it("omits default view values and preserves an explicit detail tab in load mode", () => {
+  it("omits unspecified default view values and preserves an explicitly selected default tab", () => {
     for (const q of [{}, { start: "load" }]) {
       const params = new URLSearchParams(scenarioToQuery(parse(q).scenario));
       for (const key of ["tab", "obj", "ns"]) expect(params.has(key)).toBe(false);
     }
-    expect(new URLSearchParams(scenarioToQuery(parse({ start: "load", tab: "detail" }).scenario)).get("tab")).toBe("detail");
+    for (const q of [{ tab: "detail" }, { start: "load", tab: "detail" }, { start: "load", tab: "sizing" }]) {
+      const parsed = parse(q);
+      expect(new URLSearchParams(scenarioToQuery(parsed.scenario)).get("tab")).toBe(q.tab);
+      expect(parse(Object.fromEntries(new URLSearchParams(scenarioToQuery(parsed.scenario))))).toEqual(parsed);
+    }
   });
 
   it("localizes link corrections", () => {

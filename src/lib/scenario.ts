@@ -117,7 +117,7 @@ export function scenarioFromQuery(cfg: AppConfig, models: ModelSpec[], q: QueryP
   };
   const scenario: Scenario = {
     start: q.start === "load" ? "load" : "hardware",
-    tab: q.tab === "workload" ? "sizing" : ["detail", "perf", "sizing", "compare", "import"].includes(q.tab ?? "") ? q.tab as TabId : q.start === "load" ? "sizing" : "detail",
+    tab: q.tab === undefined ? undefined : q.tab === "workload" ? "sizing" : ["detail", "perf", "sizing", "compare", "import"].includes(q.tab ?? "") ? q.tab as TabId : q.start === "load" ? "sizing" : "detail",
     sizingObjective: q.obj === "sessions" ? "sessions" : "load",
     targetSessions: positive(q.ns) === undefined ? 32 : Math.ceil(positive(q.ns)!),
     modelId: model.id,
@@ -188,8 +188,8 @@ export function scenarioToQuery(s: Scenario): string {
     r: String(s.reservePct),
   });
   if (s.start === "load") q.set("start", "load");
-  const defaultTab = s.start === "load" ? "sizing" : "detail";
-  if (s.tab && s.tab !== defaultTab) q.set("tab", s.tab);
+  // An explicit default tab must override the recipient's browser preference too.
+  if (s.tab) q.set("tab", s.tab);
   if (s.sizingObjective === "sessions") q.set("obj", "sessions");
   if (s.targetSessions !== undefined && s.targetSessions !== 32) q.set("ns", String(s.targetSessions));
   if (s.memGiB) q.set("mem", String(s.memGiB));

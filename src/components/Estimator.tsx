@@ -78,7 +78,7 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
   const [s, setS] = useState<Scenario>(() => scenarioFromQuery(config, config.models, initial).scenario);
   const [notices, setNotices] = useState<Notice[]>([]);
   const [pinned, setPinned] = useState<Scenario[]>([]);
-  const tab = s.tab ?? "detail";
+  const tab = s.tab ?? (s.start === "load" ? "sizing" : "detail");
   const setTab = (tab: TabId) => setS((prev) => ({ ...prev, tab }));
   const objective = s.sizingObjective ?? "load";
   const setObjective = (sizingObjective: "load" | "sessions") => setS((prev) => ({ ...prev, sizingObjective }));
@@ -94,7 +94,7 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
     const imp = readStorage<ModelSource[]>(STORAGE.imported, []);
     setImported(imp);
     setPinned(readStorage<Scenario[]>(STORAGE.pinned, []));
-    const saved = readStorage<string>(STORAGE.tab, "detail");
+    const saved = readStorage<string | undefined>(STORAGE.tab, undefined);
     const next = saved === "workload" ? "sizing" : saved;
     // Resolve imported identifiers before producing notices or replacing the link.
     const available = [...config.models, ...localize(imp, lang)];

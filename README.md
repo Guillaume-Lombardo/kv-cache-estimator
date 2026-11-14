@@ -59,7 +59,7 @@ pnpm run estimate model=qwen3-32b gpu=h100 n=2 ctx=65536 rps=4    # same report,
 | `start` | Entry path: `hardware` (default) or `load` | `tab` | `detail`, `perf`, `sizing`, `compare`, `import`; legacy `workload` means `sizing` |
 | `obj` | Sizing objective: `load` (default) or `sessions` | `ns` | Target concurrent full-context sessions, positive integer (default 32) |
 
-The URL includes the selected tab and sizing objective/inputs when copying a link. Default view values are omitted: `start=hardware`, `obj=load`, `ns=32`, and `tab=detail` (`tab=sizing` for `start=load`). An explicit `tab` takes priority over the tab saved in this browser; without it, the saved tab is used for the hardware entry path.
+The URL includes the selected tab and sizing objective/inputs when copying a link. Default view values are omitted: `start=hardware`, `obj=load`, `ns=32`, and an unspecified tab (`detail`, or `sizing` for `start=load`). An explicitly selected tab is always kept, including `tab=detail`, so it also overrides the recipient’s browser preference. An explicit `tab` takes priority over the tab saved in this browser; without it, the saved tab is used for the hardware entry path.
 
 The report adds `adjustments`, an array of nonblocking query corrections with `parameter`, `received`, `retained` (strings, or `null` when removing an optional override), and a stable `reason`. For example, `n=3&tp=2` keeps three GPUs and adjusts TP to a divisor. Reasons are `unknown-identifier`, `gpu-count-not-offered`, `invalid-tp`, `context-out-of-bounds`, `unsupported-format`, `dp-unavailable`, and `invalid-value` (including rounded numbers). A valid query returns an empty array. Existing report fields are preserved.
 
