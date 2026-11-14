@@ -197,7 +197,7 @@ h2 {
   gap: 16px;
   align-items: start;
 }
-@media (max-width: 960px) {
+@media (width < 960px) {
   .layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -211,17 +211,29 @@ h2 {
 }
 
 .form {
+  min-width: 0;
+  /* Leave room for the header and entry selector before the page scrolls. */
+  max-height: calc(100dvh - 160px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
   display: flex;
   flex-direction: column;
   gap: 20px;
   position: sticky;
   top: 12px;
 }
-@media (max-width: 960px) {
+@media (width < 960px) {
   .form {
     position: static;
+    max-height: none;
+    overflow: visible;
   }
 }
+.form > *, .hardware-settings > * { flex-shrink: 0; }
+.hardware-settings { display: flex; flex-direction: column; gap: 12px; }
+.hardware-settings:not([open]) > :not(summary) { display: none; }
+.hardware-settings > summary { margin-bottom: 0; }
 
 .field {
   display: flex;
@@ -888,6 +900,7 @@ h3 {
   overflow-x: auto;
 }
 .tab {
+  flex-shrink: 0;
   border: 0;
   background: none;
   font: inherit;
@@ -1277,3 +1290,70 @@ h3 {
   }
 }
 /* --- End Compare (L5) --- */
+
+/* Compact result access, shared by both entry paths. */
+:where(button, summary, input, select, textarea, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+#results-kpis, #sizing-panel { scroll-margin-top: 16px; }
+.result-summary-anchor {
+  position: sticky;
+  top: 12px;
+  height: 0;
+  margin-bottom: -16px;
+  z-index: 10;
+}
+.result-summary {
+  display: none;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 3px 12px #0002;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.result-summary-anchor[data-visible="true"] .result-summary { display: flex; }
+.result-summary small { display: block; color: var(--muted); font-size: 10px; }
+.summary-good { color: var(--good); font-weight: 600; }
+.result-summary .summary-warning { flex-basis: 100%; color: var(--bad); }
+.gpu-catalog > summary { cursor: pointer; }
+.gpu-catalog[open] > summary { margin-bottom: 8px; }
+.gpu-catalog .gpu-group + .gpu-group { margin-top: 8px; }
+.help-tip { display: inline; margin-left: 6px; font-weight: normal; }
+.help-tip > summary { display: inline; color: var(--accent); cursor: pointer; }
+.help-tip-text {
+  display: block;
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--info-soft);
+  color: var(--text);
+  font-size: 12px;
+}
+@media (width < 960px) {
+  .tabs { flex-wrap: wrap; }
+  .page { padding-bottom: calc(112px + env(safe-area-inset-bottom)); }
+  .result-summary-anchor { position: static; }
+  .result-summary, .result-summary-anchor[data-visible="false"] .result-summary {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 30;
+    border-radius: 0;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    gap: 6px 10px;
+  }
+}

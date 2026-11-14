@@ -55,6 +55,8 @@ export function GpuPicker({ gpus, value, onChange }: { gpus: GpuSpec[]; value: s
 
   return (
     <div className="gpu-picker">
+      <details className="gpu-catalog">
+        <summary className="field-label">{t("Choisir une carte", "Choose a card")} · {current.name}</summary>
       {GPU_GROUPS.map((group) => {
         const members = families.filter((f) => f.group === group.id);
         if (!members.length) return null;
@@ -71,6 +73,7 @@ export function GpuPicker({ gpus, value, onChange }: { gpus: GpuSpec[]; value: s
           </div>
         );
       })}
+      </details>
       {family.variants.length > 1 && (
         <div className="gpu-variants">
           <span className="gpu-group-label">

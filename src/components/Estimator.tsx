@@ -32,6 +32,8 @@ import { PerfPanel } from "./PerfPanel";
 import { PrefsToggles, usePrefs } from "./Prefs";
 import { SizingPanel, type SizingChoice } from "./SizingPanel";
 import { WorkloadFields } from "./WorkloadPanel";
+import { ResultSummary } from "./ResultSummary";
+import { HelpTip } from "./HelpTip";
 
 const STORAGE = { pinned: "kv-estimator:pinned", imported: "kv-estimator:imported", tab: "kv-estimator:tab" };
 const TABS = [
@@ -345,12 +347,7 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
       { items: pick("limited"), cls: "lim-lim", icon: "⚠", one: t("limité", "limited"), many: t("limités", "limited") },
       { items: pick("unverified"), cls: "lim-unv", icon: "?", one: t("non vérifié", "not verified"), many: t("non vérifiés", "not verified") },
     ].filter((g) => g.items.length);
-    if (!groups.length)
-      return (
-        <p className="hint ok">
-          {t("Tous les formats sont supportés nativement", "All formats are natively supported")} ({gpu.name}, {engine.name}).
-        </p>
-      );
+    if (!groups.length) return null;
     return (
       <p className="hint">
         {gpu.name} · {engine.name}
@@ -467,19 +464,21 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
           </div>
 
           <div className="field">
-            <label className="field-label">{t("Moteur d'inférence", "Inference engine")}</label>
+            <div className="field-label">{t("Moteur d'inférence", "Inference engine")}
+              {engine.description && <HelpTip label={t("Description du moteur", "Engine description")}>{engine.description}</HelpTip>}
+            </div>
             <ChipGroup label={t("Moteur", "Engine")} options={engineOptions} value={s.engineId} onChange={setEngine} />
-            {engine.description && <p className="hint">{engine.description}</p>}
             <EngineCapabilities engine={engine} />
           </div>
 
           <div className="field">
-            <label className="field-label">{t("Format des poids", "Weight format")}</label>
+            <div className="field-label">{t("Format des poids", "Weight format")}
+              <HelpTip label={t("Légende des formats", "Format legend")}>
+                {t("★ format natif du modèle · « officiel » : checkpoint publié par l'éditeur", "★ native model format · “official”: checkpoint published by the vendor")}
+              </HelpTip>
+            </div>
             <ChipGroup label={t("Format des poids", "Weight format")} options={weightOptions} value={s.wf} onChange={(v) => update({ wf: v })} />
             {limitationLine(config.weightFormats.map((f) => ({ label: f.label, s: weightSupport(gpu, engine, f.id, lang) })))}
-            <p className="hint">
-              {t("★ format natif du modèle · « officiel » : checkpoint publié par l'éditeur", "★ native model format · “official”: checkpoint published by the vendor")}
-            </p>
           </div>
 
           <div className="field">
@@ -490,6 +489,8 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
 
           {!loadFirst && <ContextInput model={model} value={ctx} onChange={(v) => update({ ctx: v })} />}
 
+          <details className="field advanced" open={s.memGiB !== undefined || s.offloadGiB > 0 || s.batchedTokens !== undefined || s.overheadGiB !== undefined}>
+            <summary className="field-label">{t(`Options avancées · réserve ${s.reservePct} %`, `Advanced options · reserve ${s.reservePct}%`)}</summary>
           <div className="field">
             <label className="field-label" htmlFor="reserve">
               {t("Réserve hors moteur par GPU", "Reserve outside the engine per GPU")} <strong className="value">{t(`${s.reservePct} %`, `${s.reservePct}%`)}</strong>
@@ -521,8 +522,6 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
             </p>
           </div>
 
-          <details className="field advanced" open={s.memGiB !== undefined || s.offloadGiB > 0 || s.batchedTokens !== undefined || s.overheadGiB !== undefined}>
-            <summary className="field-label">{t("Options avancées", "Advanced options")}</summary>
             <label className="inline-form">
               <span>{t("Mémoire visible par GPU", "Visible memory per GPU")}</span>
               <input
@@ -585,6 +584,9 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
 
         {/* ------------------------------------------------ Results */}
         <section className="results" aria-label={t("Résultats", "Results")}>
+          <ResultSummary fits={est.fitsOneRequest} blocking={blocking} sessions={est.sessions}
+            tokPerSec={perf.single.tokPerSecPerSession} pricePerGpu={s.priceUsd ?? gpu.priceUsdPerHour} gpuCount={s.gpuCount}
+            targetId={loadFirst ? "sizing-panel" : "results-kpis"} loadFirst={loadFirst} />
           <div className="toolbar">
             <button type="button" className="btn" onClick={pin} disabled={pinned.length >= 6} title={t("Ajouter à la comparaison", "Add to the comparison")}>
               📌 {t("Épingler", "Pin")}
@@ -598,7 +600,7 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
           </div>
 
           {!loadFirst && <>
-          <div className="kpis">
+          <div className="kpis" id="results-kpis" tabIndex={-1} aria-label={t("Indicateurs", "Indicators")}>
             <Kpi
               title={t("Poids du modèle", "Model weights")}
               value={fmt.bytes(est.weights.totalBytes)}
@@ -696,7 +698,7 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
           }} />
           </>}
 
-          <div className="panel" id="sizing-panel">
+          <div className="panel" id="sizing-panel" tabIndex={-1}>
             <div className="tabs" role="tablist">
               {TABS.map((x) => (
                 <button key={x.id} type="button" role="tab" aria-selected={tab === x.id} className={`tab${tab === x.id ? " active" : ""}`} onClick={() => selectTab(x.id)}>
