@@ -5,6 +5,8 @@ import { defaultTp, divisors, gpuCountOptions, pickKvFormat, pickWeightFormat } 
 
 /** Complete scenario state: URL-serializable and pinnable for comparison. */
 export interface Scenario {
+  /** Entry path; omitted by older pinned scenarios. */
+  start?: "hardware" | "load";
   modelId: string;
   ctx: number;
   gpuId: string;
@@ -81,6 +83,7 @@ export function scenarioFromQuery(cfg: AppConfig, models: ModelSpec[], q: QueryP
     return n === undefined ? undefined : Math.max(1, Math.round(n));
   };
   return {
+    start: q.start === "load" ? "load" : "hardware",
     modelId: model.id,
     ctx: clampContext(numParam(q.ctx), d.contextTokens),
     gpuId: gpu.id,
@@ -119,6 +122,7 @@ export function scenarioToQuery(s: Scenario): string {
     kv: s.kf,
     r: String(s.reservePct),
   });
+  if (s.start === "load") q.set("start", "load");
   if (s.memGiB) q.set("mem", String(s.memGiB));
   if (s.offloadGiB) q.set("off", String(s.offloadGiB));
   if (s.batchedTokens) q.set("mbt", String(s.batchedTokens));

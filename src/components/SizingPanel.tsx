@@ -4,8 +4,10 @@ import { useMemo, useState } from "react";
 import { contextLabel, type EstimateInput, type ParallelMode } from "@/lib/calc";
 import type { AppConfig } from "@/lib/config-schema";
 import { GPU_GROUPS, gpuGroupOf, type GpuGroupId } from "@/lib/gpu-groups";
-import { maxContextFor, sizeForTarget } from "@/lib/planning";
+import type { Workload } from "@/lib/scenario";
+import { sizeForDeployment, type SizingObjective, type SizingSort } from "@/lib/workload";
 import { usePrefs } from "./Prefs";
+import { WorkloadPanel } from "./WorkloadPanel";
 
 export interface SizingChoice {
   gpuId: string;
@@ -16,82 +18,82 @@ export interface SizingChoice {
   kf: string;
 }
 
-export function SizingPanel({ config, input, onApply }: { config: AppConfig; input: EstimateInput; onApply: (c: SizingChoice) => void }) {
+export function SizingPanel({ config, input, workload, priceUsd, onChange, onApply, objective, onObjectiveChange, target, onTargetChange, loadFirst = false }: {
+  config: AppConfig;
+  input: EstimateInput;
+  workload: Workload;
+  priceUsd?: number;
+  onChange: (w: Workload, priceUsd: number | undefined) => void;
+  onApply: (c: SizingChoice) => void;
+  objective: SizingObjective;
+  onObjectiveChange: (o: SizingObjective) => void;
+  target: number;
+  onTargetChange: (n: number) => void;
+  loadFirst?: boolean;
+}) {
   const { lang, t, fmt } = usePrefs();
-  const [target, setTarget] = useState(32);
   const [group, setGroup] = useState<GpuGroupId | "all">("all");
-  const rows = useMemo(
-    () => sizeForTarget(config, { ...input, weightFormatId: input.weightFormat.id, kvFormatId: input.kvFormat.id }, target, input.gpu.id),
-    [config, input, target],
-  );
-  const maxCtx = useMemo(() => maxContextFor(config, input, target), [config, input, target]);
+  const [sort, setSort] = useState<SizingSort>("cost");
+  const rows = useMemo(() => sizeForDeployment(config,
+    { ...input, weightFormatId: input.weightFormat.id, kvFormatId: input.kvFormat.id }, workload,
+    { objective, targetSessions: target, sort, baseGpuId: input.gpu.id, priceOverride: priceUsd }),
+  [config, input, workload, objective, target, sort, priceUsd]);
 
+  const analysis = objective === "load" && <WorkloadPanel config={config} input={input} workload={workload} priceUsd={priceUsd} onChange={onChange} hideFields={loadFirst} />;
   return (
-    <div>
-      <h3>{t("Dimensionnement inverse", "Inverse sizing")}</h3>
+    <div className="unified-sizing">
       <div className="inline-form">
-        <label htmlFor="target">{t("Objectif", "Target")}</label>
-        <input id="target" type="number" min={1} max={100000} value={target} onChange={(e) => setTarget(Math.max(1, Number(e.target.value) || 1))} />
-        <span>
-          {t("sessions simultanées à", "concurrent sessions at")} <strong>{contextLabel(input.contextTokens)}</strong> {t("avec", "with")} {input.model.name}
-        </span>
+        <label htmlFor="sizing-objective">{t("Objectif", "Objective")}</label>
+        <select id="sizing-objective" value={objective} onChange={(e) => onObjectiveChange(e.target.value as SizingObjective)}>
+          <option value="load">{t("Charge et latence", "Load and latency")}</option>
+          <option value="sessions">{t("Sessions simultanées", "Concurrent sessions")}</option>
+        </select>
       </div>
-      <p className="hint">
-        {t(
-          "Pour chaque carte : plus petit nombre de GPUs qui atteint l'objectif, en testant tous les degrés de TP valides (complétés par du PP) et la DP-attention pour les MoE ; à égalité de cartes, la configuration au meilleur débit à l'objectif est retenue. Les formats sont conservés quand la carte les supporte. Cliquez une ligne pour l'appliquer.",
-          "For each card: smallest number of GPUs that reaches the target, testing every valid TP degree (completed with PP) and DP-attention for MoE models; for the same number of cards, the configuration with the best throughput at the target is kept. Formats are kept when the card supports them. Click a row to apply it.",
-        )}
-      </p>
+      {objective === "sessions" && <>
+        <label className="inline-form" htmlFor="target">
+          {t("Sessions simultanées", "Concurrent sessions")}
+          <input id="target" type="number" min={1} max={100000} value={target} onChange={(e) => onTargetChange(Math.max(1, Math.ceil(Number(e.target.value) || 1)))} />
+          <span>{t("au contexte courant", "at current context")} <strong>{contextLabel(input.contextTokens)}</strong></span>
+        </label>
+        <p className="hint">{t("Pire cas : sessions au contexte maximal, réparties entre des répliques identiques. TTFT : prefill d'un contexte entier ; ITL et coût par token : décodage à la concurrence demandée, sans SLO ni trafic imposés.", "Worst case: full-context sessions shared across identical replicas. TTFT: prefill of a full context; ITL and token cost: decoding at the requested concurrency, without SLOs or an imposed arrival rate.")}</p>
+      </>}
+      {!loadFirst && analysis}
+      <h3>{t("Cartes pour cet objectif", "Cards for this objective")}</h3>
       <div className="filter-row">
         {(["all", ...GPU_GROUPS.map((g) => g.id)] as const).map((id) => (
           <button key={id} type="button" className={`btn${group === id ? " primary" : ""}`} onClick={() => setGroup(id)}>
             {id === "all" ? t("Toutes", "All") : GPU_GROUPS.find((g) => g.id === id)![lang]}
           </button>
         ))}
+        <label className="sizing-sort">{t("Trier par", "Sort by")} <select aria-label={t("Trier par", "Sort by")} value={sort} onChange={(e) => setSort(e.target.value as SizingSort)}>
+          <option value="cost">{t("Coût", "Cost")}</option><option value="gpus">GPUs</option>
+        </select></label>
       </div>
       <div className="table-wrap">
-        <table className="table compact clickable">
-          <thead>
-            <tr>
-              <th>{t("Carte", "Card")}</th>
-              <th className="num">GPUs</th>
-              <th>{t("Parallélisme", "Parallelism")}</th>
-              <th className="num">Sessions</th>
-              <th className="num">{t("Débit à l'objectif", "Throughput at target")}</th>
-              <th>{t("Remarque", "Note")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.filter((r) => group === "all" || gpuGroupOf(r.gpu) === group).map((r) => (
-              <tr
-                key={r.gpu.id}
-                className={r.gpuCount === null ? "row-disabled" : r.gpu.id === input.gpu.id ? "row-current" : ""}
-                onClick={() =>
-                  r.gpuCount !== null && onApply({ gpuId: r.gpu.id, gpuCount: r.gpuCount, mode: r.mode, tp: r.tp, wf: r.weightFormat, kf: r.kvFormat })
-                }
-              >
-                <td>{r.gpu.name}</td>
-                <td className="num">{r.gpuCount ?? "—"}</td>
-                <td>{r.gpuCount === null ? "—" : r.mode === "dp-ep" ? "DP-attention + EP" : r.gpuCount === 1 ? "—" : `TP ${r.tp} × PP ${r.gpuCount / r.tp}`}</td>
-                <td className="num">{r.gpuCount === null ? "—" : fmt.int(r.sessions)}</td>
-                <td className="num">{r.tokPerSecTotal ? fmt.rate(r.tokPerSecTotal) : "—"}</td>
-                <td className="muted">{r.note}</td>
-              </tr>
-            ))}
-          </tbody>
+        <table className="table compact clickable sizing-table">
+          <thead><tr>
+            <th>{t("Carte", "Card")}</th><th className="num">{t("GPUs au total", "Total GPUs")}</th><th>{t("Instance", "Instance")}</th>
+            <th className="num">{objective === "sessions" ? "Sessions" : t("Requêtes simultanées", "Concurrent requests")}</th>
+            <th className="num">TTFT</th><th className="num">ITL</th><th className="num">$/h</th><th className="num">{t("$/M tokens sortie", "$/M output tokens")}</th><th>{t("Remarque", "Note")}</th>
+          </tr></thead>
+          <tbody>{rows.filter((r) => group === "all" || gpuGroupOf(r.gpu) === group).map((r) => {
+            const apply = () => r.gpuCount !== null && onApply({ gpuId: r.gpu.id, gpuCount: r.gpuCount, mode: r.mode, tp: r.tp, wf: r.weightFormat, kf: r.kvFormat });
+            return <tr key={r.gpu.id} className={r.gpuCount === null ? "row-disabled" : r.gpu.id === input.gpu.id ? "row-current" : ""} onClick={apply}>
+              <td>{r.gpuCount === null ? r.gpu.name : <button className="link sizing-apply">{r.gpu.name}</button>}</td>
+              <td className="num">{r.gpus ?? "—"}</td>
+              <td>{r.gpuCount === null ? "—" : <>{r.replicas} × {r.gpuCount} GPUs<br /><span className="muted">{r.mode === "dp-ep" ? "DP-attention + EP" : `TP ${r.tp} × PP ${r.gpuCount / r.tp}`}</span></>}</td>
+              <td className="num">{r.gpuCount === null ? "—" : `${fmt.int(Math.ceil(r.concurrency))} / ${fmt.int(r.capacity)}`}</td>
+              <td className="num">{r.ttftSeconds === null ? "—" : fmt.duration(r.ttftSeconds)}</td>
+              <td className="num">{r.itlMs === null ? "—" : `${fmt.num(r.itlMs)} ms`}</td>
+              <td className="num">{r.cost ? fmt.num(r.cost.usdPerHour) : "—"}</td>
+              <td className="num">{r.cost ? fmt.num(r.cost.usdPerMillionOutput) : "—"}</td>
+              <td className="muted">{r.note}</td>
+            </tr>;
+          })}</tbody>
         </table>
       </div>
-      <p className="hint">
-        {t(`Sur la configuration actuelle (${input.gpuCount} × ${input.gpu.name}) : `, `With the current configuration (${input.gpuCount} × ${input.gpu.name}): `)}
-        {maxCtx ? (
-          <>
-            {t(`contexte maximal pour ${fmt.int(target)} sessions = `, `maximum context for ${fmt.int(target)} sessions = `)}
-            <strong>{contextLabel(maxCtx)}</strong>.
-          </>
-        ) : (
-          <>{t("objectif inatteignable sans erreur, même au plus petit palier.", "target unreachable without errors, even at the smallest preset.")}</>
-        )}
-      </p>
+      <p className="hint">{t("Capacité : nécessaire / disponible sur toutes les répliques. Prix indicatifs ; prix absents en fin de tri par coût. À GPUs et coût égaux, préférence au TP sans PP. Cliquez une carte pour appliquer la forme d'une instance ; les répliques restent un plan de déploiement.", "Capacity: required / available across replicas. Indicative prices; missing prices follow known prices in cost order. At equal GPU count and cost, TP without PP is preferred. Click a card to apply one instance shape; replicas remain a deployment plan.")}</p>
+      {loadFirst && analysis}
     </div>
   );
 }

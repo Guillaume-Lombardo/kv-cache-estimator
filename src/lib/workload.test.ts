@@ -10,7 +10,7 @@ import { estimatePerf } from "./perf";
 import { maxContextFor } from "./planning";
 import { buildReport, unknownIdentifiers } from "./report";
 import { resolveScenario, scenarioFromQuery, scenarioToQuery, type QueryParams, type Workload } from "./scenario";
-import { analyzeWorkload, instanceLoad, sizeForWorkload } from "./workload";
+import { analyzeWorkload, instanceLoad, sizeForWorkload, sizeForDeployment, sortSizingRows } from "./workload";
 
 const load = async (): Promise<AppConfig> => {
   const r = await parseConfigFile(path.join(__dirname, "../../config/estimator.yaml"));
@@ -320,5 +320,74 @@ describe("workload validity", async () => {
     const issue = collectIssues(input, estimate(input), cfg.weightFormats).find((i) => i.code === "reserve-below-overhead");
     expect(issue?.severity).toBe("error");
     expect(buildReport(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", gpu: "h100", eng: "sglang", n: "1", r: "0" }), "en")!.results.valid).toBe(false);
+  });
+});
+
+// Both entry paths use one replica-aware sizing table; legacy report fields stay intact.
+describe("unified deployment sizing", async () => {
+  const cfg = await load();
+  const scenario = scenarioFromQuery(cfg, cfg.models, { model: "qwen3-32b", gpu: "h100", n: "2", ctx: "32768" });
+  const input = resolveScenario(cfg, cfg.models, scenario, "en")!;
+  const base = { ...input, weightFormatId: input.weightFormat.id, kvFormatId: input.kvFormat.id };
+
+  it("uses replicas to reach full-context sessions and prices the complete deployment", () => {
+    const oneGpuCfg = { ...cfg, gpus: cfg.gpus.filter((g) => g.id === "h100"), largeGpuCounts: [], intermediateGpuCounts: [] };
+    const [r] = sizeForDeployment(oneGpuCfg, base, scenario.workload, { objective: "sessions", targetSessions: 1000, baseGpuId: "h100", priceOverride: 2 });
+    expect(r.replicas).toBeGreaterThan(1);
+    expect(r.capacity).toBeGreaterThanOrEqual(1000);
+    expect(r.gpus).toBe(r.replicas * r.gpuCount!);
+    const perInstance = estimate({ ...input, gpuCount: r.gpuCount!, tp: r.tp, mode: r.mode }).sessions;
+    expect(r.replicas * perInstance).toBeGreaterThanOrEqual(1000);
+    expect(r.cost!.usdPerHour).toBe(r.gpus! * 2);
+    expect(r.cost!.usdPerMillionOutput).toBeGreaterThan(0);
+  });
+
+  it("selects the cheapest H100 deployment for Qwen3-32B, 32 sessions at 32k", () => {
+    const [r] = sizeForDeployment({ ...cfg, gpus: cfg.gpus.filter((g) => g.id === "h100") }, base, scenario.workload, { objective: "sessions", targetSessions: 32 });
+    // Five GPUs in one PP pipeline really are cheaper than six GPUs in TP-only replicas.
+    expect(r.gpus).toBe(5);
+    expect(r.gpuCount).toBe(5);
+    expect(r.tp).toBe(1);
+    expect(r.capacity).toBeGreaterThanOrEqual(32);
+    const alternatives = [1, 2, 4, 8].map((tp) => tp * Math.ceil(32 / estimate({ ...input, gpuCount: tp, tp }).sessions));
+    expect(Math.min(...alternatives)).toBeGreaterThan(r.gpus!);
+  });
+
+  it("prefers TP-only replicas at equal GPUs and flags a close TP alternative to PP", () => {
+    const h100 = { ...cfg, gpus: [input.gpu] };
+    const [equal] = sizeForDeployment(h100, base, scenario.workload, { objective: "sessions", targetSessions: 80 });
+    expect([equal.gpus, equal.gpuCount, equal.tp, equal.replicas]).toEqual([12, 4, 4, 3]);
+    const [pp] = sizeForDeployment(h100, base, scenario.workload, { objective: "sessions", targetSessions: 100 });
+    expect(pp.gpus).toBe(15);
+    expect(pp.note).toContain("TP-only replicas available within 10% cost");
+  });
+
+  it("sorts by cost or GPU count, then prefers TP without PP at equal cost", () => {
+    const template = sizeForDeployment({ ...cfg, gpus: [input.gpu] }, base, scenario.workload, { objective: "sessions", targetSessions: 1 })[0];
+    const row = (gpus: number, usd: number, gpuCount: number, tp: number) => ({ ...template, gpus, gpuCount, tp, cost: { usdPerHour: usd, usdPerMillionOutput: usd, usdPerMillionTotal: usd } });
+    const pp = row(4, 8, 4, 1), tp = row(4, 8, 2, 2), cheap = row(8, 4, 8, 8), small = row(2, 10, 2, 2);
+    expect(sortSizingRows([pp, cheap, tp, small], "cost")).toEqual([cheap, tp, pp, small]);
+    expect(sortSizingRows([pp, cheap, tp, small], "gpus")).toEqual([small, tp, pp, cheap]);
+    expect(sortSizingRows([row(4, 9, 4, 4), pp], "gpus")[0]).toBe(pp);
+  });
+
+  it("keeps the old workload entry point and new load sizing equivalent", () => {
+    expect(sizeForWorkload(cfg, base, scenario.workload, "h100"))
+      .toEqual(sizeForDeployment(cfg, base, scenario.workload, { objective: "load", baseGpuId: "h100" }));
+  });
+
+  it("round-trips the load entry mode and preserves old workload query semantics", () => {
+    const q = { model: "qwen3-32b", gpu: "h100", n: "2", start: "load", in: "3000", out: "700", rps: "4", ttft: "3", itl: "60", usd: "2.5" };
+    const s = scenarioFromQuery(cfg, cfg.models, q);
+    expect(s.start).toBe("load");
+    expect(s.workload).toEqual({ inputTokens: 3000, outputTokens: 700, requestsPerSec: 4, ttftSeconds: 3, itlMs: 60 });
+    expect(scenarioFromQuery(cfg, cfg.models, Object.fromEntries(new URLSearchParams(scenarioToQuery(s))))).toEqual(s);
+    expect(scenarioFromQuery(cfg, cfg.models, { ...q, start: undefined }).start).toBe("hardware");
+    const report = buildReport(cfg, cfg.models, s, "en")!;
+    expect(report.workload.requestsPerSec).toBe(4);
+    expect(report.workload).toHaveProperty("aggregated");
+    expect(report.workload).toHaveProperty("disaggregated");
+    expect(report.results).toHaveProperty("sessions");
+    expect(report.parallelism).toHaveProperty("gpuCount");
   });
 });

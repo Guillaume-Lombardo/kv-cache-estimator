@@ -1,13 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { EstimateInput } from "@/lib/calc";
 import type { AppConfig } from "@/lib/config-schema";
-import { GPU_GROUPS, gpuGroupOf, type GpuGroupId } from "@/lib/gpu-groups";
 import type { Workload } from "@/lib/scenario";
-import { analyzeWorkload, sizeForWorkload, type Cost, type Infeasible } from "@/lib/workload";
+import { analyzeWorkload, type Cost, type Infeasible } from "@/lib/workload";
 import { usePrefs } from "./Prefs";
-import type { SizingChoice } from "./SizingPanel";
 
 const INFEASIBLE: Record<Infeasible, { fr: string; en: string }> = {
   "invalid-config": {
@@ -29,31 +27,15 @@ const INFEASIBLE: Record<Infeasible, { fr: string; en: string }> = {
   },
 };
 
-export function WorkloadPanel({
-  config,
-  input,
-  workload,
-  priceUsd,
-  onChange,
-  onApply,
-}: {
-  config: AppConfig;
+export interface WorkloadFieldsProps {
   input: EstimateInput;
   workload: Workload;
   priceUsd?: number;
   onChange: (w: Workload, priceUsd: number | undefined) => void;
-  onApply: (c: SizingChoice) => void;
-}) {
-  const { lang, t, fmt } = usePrefs();
-  const [group, setGroup] = useState<GpuGroupId | "all">("all");
-  const price = priceUsd ?? input.gpu.priceUsdPerHour;
-  const a = useMemo(() => analyzeWorkload(config, input, workload, price), [config, input, workload, price]);
-  const rows = useMemo(
-    () => sizeForWorkload(config, { ...input, weightFormatId: input.weightFormat.id, kvFormatId: input.kvFormat.id }, workload, input.gpu.id, priceUsd),
-    [config, input, workload, priceUsd],
-  );
-  const shown = rows.filter((r) => group === "all" || gpuGroupOf(r.gpu) === group);
+}
 
+export function WorkloadFields({ input, workload, priceUsd, onChange }: WorkloadFieldsProps) {
+  const { t } = usePrefs();
   const num = (key: keyof Workload, label: string, unit: string, step = 1) => (
     <label>
       {label}
@@ -70,21 +52,7 @@ export function WorkloadPanel({
       <span className="muted">{unit}</span>
     </label>
   );
-  const usd = (x: number) => (lang === "fr" ? `${fmt.num(x)} $` : `$${fmt.num(x)}`);
-  const costText = (c: Cost | null) => (c ? `${usd(c.usdPerHour)}/h · ${usd(c.usdPerMillionOutput)}/M ${t("sortie", "out")}` : "—");
-  const mark = (bad: boolean) => <span className={bad ? "slo-bad" : "slo-ok"}>{bad ? "✕" : "✓"}</span>;
-  const parallel = (mode: string, n: number, tp: number) => (mode === "dp-ep" ? "DP-attention + EP" : `TP ${tp} × PP ${n / tp}`);
-  /** "3 × 2 GPUs · TP 2 × PP 1", "1 GPU". */
-  const shape = (replicas: number, n: number, mode: string, tp: number) =>
-    `${replicas > 1 ? `${replicas} × ` : ""}${n} GPU${n > 1 ? "s" : ""}${n > 1 ? ` · ${parallel(mode, n, tp)}` : ""}`;
-  const s = a.single;
-  const agg = a.aggregated;
-  const dis = a.disaggregated;
-  const n = input.gpuCount;
-
   return (
-    <div>
-      <h3>{t("Charge et objectifs de latence", "Load and latency targets")}</h3>
       <div className="workload-form">
         {num("inputTokens", t("Prompt moyen", "Average prompt"), "tokens", 100)}
         {num("outputTokens", t("Sortie moyenne", "Average output"), "tokens", 50)}
@@ -104,6 +72,39 @@ export function WorkloadPanel({
           <span className="muted">{t(`USD/h (${input.gpu.name})`, `USD/h (${input.gpu.name})`)}</span>
         </label>
       </div>
+  );
+}
+
+export function WorkloadPanel({
+  config,
+  input,
+  workload,
+  priceUsd,
+  onChange,
+  hideFields = false,
+}: {
+  config: AppConfig;
+  input: EstimateInput;
+  workload: Workload;
+  priceUsd?: number;
+  onChange: (w: Workload, priceUsd: number | undefined) => void;
+  hideFields?: boolean;
+}) {
+  const { lang, t, fmt } = usePrefs();
+  const price = priceUsd ?? input.gpu.priceUsdPerHour;
+  const a = useMemo(() => analyzeWorkload(config, input, workload, price), [config, input, workload, price]);
+  const usd = (x: number) => (lang === "fr" ? `${fmt.num(x)} $` : `$${fmt.num(x)}`);
+  const costText = (c: Cost | null) => (c ? `${usd(c.usdPerHour)}/h · ${usd(c.usdPerMillionOutput)}/M ${t("sortie", "out")}` : "—");
+  const mark = (bad: boolean) => <span className={bad ? "slo-bad" : "slo-ok"}>{bad ? "✕" : "✓"}</span>;
+  const parallel = (mode: string, n: number, tp: number) => (mode === "dp-ep" ? "DP-attention + EP" : `TP ${tp} × PP ${n / tp}`);
+  const s = a.single;
+  const agg = a.aggregated;
+  const dis = a.disaggregated;
+  const n = input.gpuCount;
+
+  return (
+    <div>
+      {!hideFields && <WorkloadFields input={input} workload={workload} priceUsd={priceUsd} onChange={onChange} />}
 
       <h3>
         {t("Instance actuelle", "Current instance")} ({n} × {input.gpu.name}
@@ -186,46 +187,6 @@ export function WorkloadPanel({
         </div>
       )}
 
-      <h3>{t("Cartes pour cette charge", "Cards for this load")}</h3>
-      <div className="filter-row">
-        {(["all", ...GPU_GROUPS.map((g) => g.id)] as const).map((id) => (
-          <button key={id} type="button" className={`btn${group === id ? " primary" : ""}`} onClick={() => setGroup(id)}>
-            {id === "all" ? t("Toutes", "All") : GPU_GROUPS.find((g) => g.id === id)![lang]}
-          </button>
-        ))}
-      </div>
-      <div className="table-wrap">
-        <table className="table compact clickable">
-          <thead>
-            <tr>
-              <th>{t("Carte", "Card")}</th>
-              <th className="num">{t("GPUs au total", "Total GPUs")}</th>
-              <th>{t("Instance", "Instance")}</th>
-              <th className="num">P/D</th>
-              <th className="num">ITL</th>
-              <th>{t("Coût", "Cost")}</th>
-              <th>{t("Remarque", "Note")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {shown.map((r) => (
-              <tr
-                key={r.gpu.id}
-                className={r.gpuCount === null ? "row-disabled" : r.gpu.id === input.gpu.id ? "row-current" : ""}
-                onClick={() => r.gpuCount !== null && onApply({ gpuId: r.gpu.id, gpuCount: r.gpuCount, mode: r.mode, tp: r.tp, wf: r.weightFormat, kf: r.kvFormat })}
-              >
-                <td>{r.gpu.name}</td>
-                <td className="num">{r.gpus ?? "—"}</td>
-                <td>{r.gpuCount === null ? "—" : shape(r.replicas, r.gpuCount, r.mode, r.tp)}</td>
-                <td className="num">{r.disaggregatedGpus ?? "—"}</td>
-                <td className="num">{r.itlMs === null ? "—" : `${fmt.num(r.itlMs)} ms`}</td>
-                <td>{costText(r.cost)}</td>
-                <td className="muted">{r.note}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
       <p className="hint">
         {t(
           "Modèle au premier ordre, sans file d'attente : chaque requête garde en moyenne prompt + sortie/2 tokens de KV ; les prefills prennent une part u du calcul et ralentissent les étapes limitées par le calcul de 1/(1−u) ; TTFT = prefill seul/(1−u) ; concurrence = débit × (TTFT + sortie × ITL). Les instances identiques se partagent le débit derrière un routeur. En P/D, le pool prefill transfère le KV du prompt au pool decode par le réseau (",
