@@ -20,7 +20,7 @@ const load = async (): Promise<AppConfig> => {
 
 describe("runtime overhead", async () => {
   const cfg = await load();
-  const inputFor = (q: QueryParams) => resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { n: "1", ...q }), "en")!;
+  const inputFor = (q: QueryParams) => resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { n: "1", ...q }).scenario, "en")!;
 
   it("vLLM takes the activation peak and runtime memory from its own memory fraction", () => {
     const e = estimate(inputFor({ model: "qwen3-32b", gpu: "h100" }));
@@ -71,13 +71,13 @@ describe("context length", async () => {
     expect(parseContext("abc")).toBeNull();
   });
   it("keeps an exact context from the URL instead of rounding it to a preset", () => {
-    const s = scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", ctx: "40960" });
+    const s = scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", ctx: "40960" }).scenario;
     expect(s.ctx).toBe(40960);
-    expect(scenarioFromQuery(cfg, cfg.models, { ctx: "1" }).ctx).toBe(256);
+    expect(scenarioFromQuery(cfg, cfg.models, { ctx: "1" }).scenario.ctx).toBe(256);
   });
   it("tries the model limit when looking for the maximum context", () => {
     // Qwen3-8B: 40960 native tokens, between the 32k and 64k presets.
-    const input = resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", gpu: "h100", n: "1", ctx: "40960" }), "en")!;
+    const input = resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", gpu: "h100", n: "1", ctx: "40960" }).scenario, "en")!;
     expect(maxContextFor(cfg, input, 1)).toBe(input.model.maxContextExtended ?? input.model.maxContext);
   });
 });
@@ -85,8 +85,8 @@ describe("context length", async () => {
 describe("prefill", async () => {
   const cfg = await load();
   it("a single prompt's prefill runs on one PP stage, not on every GPU", () => {
-    const one = resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", gpu: "h100", n: "1" }), "en")!;
-    const pp2 = resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", gpu: "h100", n: "2", tp: "1" }), "en")!;
+    const one = resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", gpu: "h100", n: "1" }).scenario, "en")!;
+    const pp2 = resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", gpu: "h100", n: "2", tp: "1" }).scenario, "en")!;
     const p1 = estimatePerf(one, estimate(one), cfg.performance).prefillSeconds;
     const p2 = estimatePerf(pp2, estimate(pp2), cfg.performance).prefillSeconds;
     expect(p2).toBeCloseTo(p1, 6);
@@ -96,7 +96,7 @@ describe("prefill", async () => {
 describe("workload", async () => {
   const cfg = await load();
   const w: Workload = { inputTokens: 2000, outputTokens: 500, requestsPerSec: 2, ttftSeconds: 2, itlMs: 50 };
-  const inputFor = (q: QueryParams) => resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { n: "1", ...q }), "en")!;
+  const inputFor = (q: QueryParams) => resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { n: "1", ...q }).scenario, "en")!;
 
   it("concurrency follows Little's law at the solved ITL", () => {
     const a = analyzeWorkload(cfg, inputFor({ model: "qwen3-8b", gpu: "h100", ctx: "32768" }), w);
@@ -166,29 +166,29 @@ describe("scenario URL and report", async () => {
   const cfg = await load();
   it("round-trips the workload, runtime settings and price", () => {
     const q = { model: "qwen3-8b", gpu: "h100", ctx: "40960", mbt: "4096", ovh: "2.5", in: "1500", out: "300", rps: "3.5", ttft: "1", itl: "40", usd: "2.4" };
-    const s = scenarioFromQuery(cfg, cfg.models, q);
-    const back = scenarioFromQuery(cfg, cfg.models, Object.fromEntries(new URLSearchParams(scenarioToQuery(s))));
+    const s = scenarioFromQuery(cfg, cfg.models, q).scenario;
+    const back = scenarioFromQuery(cfg, cfg.models, Object.fromEntries(new URLSearchParams(scenarioToQuery(s)))).scenario;
     expect(back).toEqual(s);
     expect(s.workload).toEqual({ inputTokens: 1500, outputTokens: 300, requestsPerSec: 3.5, ttftSeconds: 1, itlMs: 40 });
   });
   it("accepts an intermediate GPU count in the URL only where it is offered", () => {
-    expect(scenarioFromQuery(cfg, cfg.models, { model: "qwen3-32b", gpu: "gb200", n: "12" }).gpuCount).toBe(12);
-    expect(scenarioFromQuery(cfg, cfg.models, { model: "qwen3-32b", gpu: "h100", n: "24" }).gpuCount).toBe(24);
+    expect(scenarioFromQuery(cfg, cfg.models, { model: "qwen3-32b", gpu: "gb200", n: "12" }).scenario.gpuCount).toBe(12);
+    expect(scenarioFromQuery(cfg, cfg.models, { model: "qwen3-32b", gpu: "h100", n: "24" }).scenario.gpuCount).toBe(24);
     // 12 H100s would be one and a half HGX servers: back to the catalogue default, with a TP degree that divides it.
-    const s = scenarioFromQuery(cfg, cfg.models, { model: "qwen3-32b", gpu: "h100", n: "12", tp: "4" });
+    const s = scenarioFromQuery(cfg, cfg.models, { model: "qwen3-32b", gpu: "h100", n: "12", tp: "4" }).scenario;
     expect(s.gpuCount).toBe(cfg.defaults.gpuCount);
     expect(s.gpuCount % s.tp).toBe(0);
-    const back = scenarioFromQuery(cfg, cfg.models, Object.fromEntries(new URLSearchParams(scenarioToQuery(scenarioFromQuery(cfg, cfg.models, { gpu: "gb200", n: "12" })))));
+    const back = scenarioFromQuery(cfg, cfg.models, Object.fromEntries(new URLSearchParams(scenarioToQuery(scenarioFromQuery(cfg, cfg.models, { gpu: "gb200", n: "12" }).scenario)))).scenario;
     expect(back.gpuCount).toBe(12);
   });
   it("gives every issue a stable code", () => {
-    const input = resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "kimi-k2-instruct", gpu: "l40s", n: "8", tp: "8" }), "en")!;
+    const input = resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "kimi-k2-instruct", gpu: "l40s", n: "8", tp: "8" }).scenario, "en")!;
     const issues = collectIssues(input, estimate(input), cfg.weightFormats);
     expect(issues.length).toBeGreaterThan(0);
     for (const i of issues) expect(i.code).toMatch(/^[a-z0-9-]+$/);
   });
   it("builds a JSON report and rejects unknown identifiers", () => {
-    const s = scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", gpu: "h100" });
+    const s = scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", gpu: "h100" }).scenario;
     const r = buildReport(cfg, cfg.models, s, "en")!;
     expect(r.results.sessions).toBeGreaterThan(0);
     expect(r.results.overheadPerGpu.totalGiB).toBeGreaterThan(0);
@@ -246,7 +246,7 @@ describe("Hugging Face download", () => {
 
 describe("engine catalogue", async () => {
   const cfg = await load();
-  const inputFor = (q: QueryParams) => resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { n: "1", ...q }), "en")!;
+  const inputFor = (q: QueryParams) => resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { n: "1", ...q }).scenario, "en")!;
   const gpu = (id: string) => cfg.gpus.find((g) => g.id === id)!;
   const engine = (id: string) => cfg.engines.find((e) => e.id === id)!;
 
@@ -267,7 +267,7 @@ describe("engine catalogue", async () => {
   });
 
   it("writes an SGLang launch command with its own options", () => {
-    const r = buildReport(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "qwen3-30b-a3b-2507", gpu: "h100", eng: "sglang", n: "4", mode: "dp-ep", kv: "fp8" }), "en")!;
+    const r = buildReport(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "qwen3-30b-a3b-2507", gpu: "h100", eng: "sglang", n: "4", mode: "dp-ep", kv: "fp8" }).scenario, "en")!;
     expect(r.command).toContain("python3 -m sglang.launch_server --model-path");
     expect(r.command).toContain("--tp-size 4 --attn-dp-size 4 --ep-size 4");
     expect(r.command).toContain("--kv-cache-dtype fp8_e4m3");
@@ -293,7 +293,7 @@ describe("engine catalogue", async () => {
 
 describe("workload validity", async () => {
   const cfg = await load();
-  const inputFor = (q: QueryParams) => resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { n: "1", ...q }), "en")!;
+  const inputFor = (q: QueryParams) => resolveScenario(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { n: "1", ...q }).scenario, "en")!;
 
   it("rejects a load whose concurrency has not settled instead of returning an early iterate", () => {
     // Qwen3-0.6B on one B200: the fixed point lies beyond the KV capacity; early iterates sit far below it.
@@ -311,7 +311,7 @@ describe("workload validity", async () => {
     expect(a.infeasible).toBe("invalid-config");
     expect(a.aggregated).toBeNull();
     expect(a.disaggregated).toBeNull();
-    const r = buildReport(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", gpu: "h100", n: "3", tp: "3" }), "en")!;
+    const r = buildReport(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", gpu: "h100", n: "3", tp: "3" }).scenario, "en")!;
     expect(r.workload.singleInstance.meetsTargets).toBe(false);
   });
 
@@ -319,14 +319,14 @@ describe("workload validity", async () => {
     const input = inputFor({ model: "qwen3-8b", gpu: "h100", eng: "sglang", r: "0" });
     const issue = collectIssues(input, estimate(input), cfg.weightFormats).find((i) => i.code === "reserve-below-overhead");
     expect(issue?.severity).toBe("error");
-    expect(buildReport(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", gpu: "h100", eng: "sglang", n: "1", r: "0" }), "en")!.results.valid).toBe(false);
+    expect(buildReport(cfg, cfg.models, scenarioFromQuery(cfg, cfg.models, { model: "qwen3-8b", gpu: "h100", eng: "sglang", n: "1", r: "0" }).scenario, "en")!.results.valid).toBe(false);
   });
 });
 
 // Both entry paths use one replica-aware sizing table; legacy report fields stay intact.
 describe("unified deployment sizing", async () => {
   const cfg = await load();
-  const scenario = scenarioFromQuery(cfg, cfg.models, { model: "qwen3-32b", gpu: "h100", n: "2", ctx: "32768" });
+  const scenario = scenarioFromQuery(cfg, cfg.models, { model: "qwen3-32b", gpu: "h100", n: "2", ctx: "32768" }).scenario;
   const input = resolveScenario(cfg, cfg.models, scenario, "en")!;
   const base = { ...input, weightFormatId: input.weightFormat.id, kvFormatId: input.kvFormat.id };
 
@@ -378,11 +378,11 @@ describe("unified deployment sizing", async () => {
 
   it("round-trips the load entry mode and preserves old workload query semantics", () => {
     const q = { model: "qwen3-32b", gpu: "h100", n: "2", start: "load", in: "3000", out: "700", rps: "4", ttft: "3", itl: "60", usd: "2.5" };
-    const s = scenarioFromQuery(cfg, cfg.models, q);
+    const s = scenarioFromQuery(cfg, cfg.models, q).scenario;
     expect(s.start).toBe("load");
     expect(s.workload).toEqual({ inputTokens: 3000, outputTokens: 700, requestsPerSec: 4, ttftSeconds: 3, itlMs: 60 });
-    expect(scenarioFromQuery(cfg, cfg.models, Object.fromEntries(new URLSearchParams(scenarioToQuery(s))))).toEqual(s);
-    expect(scenarioFromQuery(cfg, cfg.models, { ...q, start: undefined }).start).toBe("hardware");
+    expect(scenarioFromQuery(cfg, cfg.models, Object.fromEntries(new URLSearchParams(scenarioToQuery(s)))).scenario).toEqual(s);
+    expect(scenarioFromQuery(cfg, cfg.models, { ...q, start: undefined }).scenario.start).toBe("hardware");
     const report = buildReport(cfg, cfg.models, s, "en")!;
     expect(report.workload.requestsPerSec).toBe(4);
     expect(report.workload).toHaveProperty("aggregated");

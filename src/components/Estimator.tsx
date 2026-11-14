@@ -20,7 +20,7 @@ import { localize, type Lang } from "@/lib/i18n";
 import { estimatePerf } from "@/lib/perf";
 import { defaultTp, divisors, gpuCountOptions, maxTp, pickKvFormat, pickWeightFormat } from "@/lib/planning";
 import { buildReport, UNMODELLED } from "@/lib/report";
-import { launchCommand, resolveScenario, scenarioFromQuery, scenarioToQuery, type QueryParams, type Scenario } from "@/lib/scenario";
+import { adjustmentMessage, launchCommand, resolveScenario, scenarioFromQuery, scenarioToQuery, type QueryParams, type Scenario } from "@/lib/scenario";
 import { ChipGroup, type ChipOption } from "./ChipGroup";
 import { ComparePanel } from "./ComparePanel";
 import { ContextInput } from "./ContextInput";
@@ -75,12 +75,16 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
   const [imported, setImported] = useState<ModelSource[]>([]);
   const importedModels = useMemo(() => localize(imported, lang), [imported, lang]);
   const models = useMemo(() => [...config.models, ...importedModels], [config.models, importedModels]);
-  const [s, setS] = useState<Scenario>(() => scenarioFromQuery(config, config.models, initial));
+  const [s, setS] = useState<Scenario>(() => scenarioFromQuery(config, config.models, initial).scenario);
   const [notices, setNotices] = useState<Notice[]>([]);
   const [pinned, setPinned] = useState<Scenario[]>([]);
-  const [tab, setTab] = useState<TabId>(initial.start === "load" ? "sizing" : "detail");
-  const [objective, setObjective] = useState<"load" | "sessions">("load");
-  const [target, setTarget] = useState(32);
+  const tab = s.tab ?? (s.start === "load" ? "sizing" : "detail");
+  const setTab = (tab: TabId) => setS((prev) => ({ ...prev, tab }));
+  const objective = s.sizingObjective ?? "load";
+  const setObjective = (sizingObjective: "load" | "sessions") => setS((prev) => ({ ...prev, sizingObjective }));
+  const target = s.targetSessions ?? 32;
+  const setTarget = (targetSessions: number) => setS((prev) => ({ ...prev, targetSessions }));
+  const [ready, setReady] = useState(false);
   const [sizingReset, setSizingReset] = useState(0);
   const loadFirst = s.start === "load";
   const [linkCopied, setLinkCopied] = useState(false);
@@ -90,16 +94,21 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
     const imp = readStorage<ModelSource[]>(STORAGE.imported, []);
     setImported(imp);
     setPinned(readStorage<Scenario[]>(STORAGE.pinned, []));
-    const saved = readStorage<string>(STORAGE.tab, "detail");
+    const saved = readStorage<string | undefined>(STORAGE.tab, undefined);
     const next = saved === "workload" ? "sizing" : saved;
-    if (initial.start !== "load" && TABS.some((x) => x.id === next)) setTab(next as TabId);
-    // Link to a model imported in this browser.
-    if (initial.model && imp.some((m) => m.id === initial.model)) setS(scenarioFromQuery(config, [...config.models, ...localize(imp, lang)], initial));
+    // Resolve imported identifiers before producing notices or replacing the link.
+    const available = [...config.models, ...localize(imp, lang)];
+    const parsed = scenarioFromQuery(config, available, initial);
+    if (initial.tab === undefined && initial.start !== "load" && TABS.some((x) => x.id === next)) parsed.scenario.tab = next as TabId;
+    setS(parsed.scenario);
+    setNotices(parsed.adjustments.map((a) => notice(adjustmentMessage(a, "fr", config, available), adjustmentMessage(a, "en", config, available))));
+    setReady(true);
   }, []);
   useEffect(() => {
+    if (!ready) return;
     window.history.replaceState(null, "", `?${scenarioToQuery(s)}`);
     setLinkCopied(false);
-  }, [s]);
+  }, [s, ready]);
 
   const model = models.find((m) => m.id === s.modelId) ?? models[0];
   const gpu = config.gpus.find((g) => g.id === s.gpuId)!;
@@ -197,8 +206,8 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
   };
   const loadScenario = (next: Scenario) => {
     const fixed = scenarioFromQuery(config, models, Object.fromEntries(new URLSearchParams(scenarioToQuery(next))));
-    setNotices([]);
-    setS(fixed);
+    setNotices(fixed.adjustments.map((a) => notice(adjustmentMessage(a, "fr", config, models), adjustmentMessage(a, "en", config, models))));
+    setS({ ...fixed.scenario, tab });
   };
   const applySizing = (c: SizingChoice) => {
     const sameGpu = c.gpuId === s.gpuId;

@@ -36,7 +36,7 @@ describe("scenario comparison", async () => {
   const parsed = await parseConfigFile(path.join(__dirname, "../../config/estimator.yaml"));
   if (!parsed.ok) throw new Error(parsed.error);
   const cfg = localize(parsed.config, "en");
-  const scenario = (q: QueryParams = {}) => scenarioFromQuery(cfg, cfg.models, { model: "qwen3-32b", gpu: "h100", n: "2", tp: "2", ctx: "32768", ...q });
+  const scenario = (q: QueryParams = {}) => scenarioFromQuery(cfg, cfg.models, { model: "qwen3-32b", gpu: "h100", n: "2", tp: "2", ctx: "32768", ...q }).scenario;
   const compare = (...scenarios: ReturnType<typeof scenario>[]) => compareScenarios(cfg, cfg.models, scenarios, "en");
   const value = (c: ReturnType<typeof compare>, id: string, i = 0) => c.rows.find((r) => r.id === id)!.values[i];
 

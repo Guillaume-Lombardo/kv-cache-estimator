@@ -7,6 +7,10 @@ import { defaultTp, divisors, gpuCountOptions, pickKvFormat, pickWeightFormat } 
 export interface Scenario {
   /** Entry path; omitted by older pinned scenarios. */
   start?: "hardware" | "load";
+  /** View state; optional for older pinned scenarios. */
+  tab?: TabId;
+  sizingObjective?: "load" | "sessions";
+  targetSessions?: number;
   modelId: string;
   ctx: number;
   gpuId: string;
@@ -45,6 +49,35 @@ export interface Workload {
 
 export const DEFAULT_WORKLOAD: Workload = { inputTokens: 2000, outputTokens: 500, requestsPerSec: 2, ttftSeconds: 2, itlMs: 50 };
 
+export type TabId = "detail" | "perf" | "sizing" | "compare" | "import";
+
+export interface ScenarioAdjustment {
+  parameter: string;
+  received: string;
+  /** Null means an invalid optional override was removed. */
+  retained: string | null;
+  reason: "unknown-identifier" | "gpu-count-not-offered" | "invalid-tp" | "context-out-of-bounds" | "unsupported-format" | "dp-unavailable" | "invalid-value";
+}
+
+/** User-facing link corrections, kept separate from the canonical scenario. */
+export function adjustmentMessage(a: ScenarioAdjustment, lang: Lang, cfg: AppConfig, models: ModelSpec[]): string {
+  const t = tr(lang);
+  const names: Record<string, string> = { model: t("modèle", "model"), gpu: "GPU", eng: t("moteur", "engine"), ctx: t("contexte", "context") };
+  const reasons: Record<ScenarioAdjustment["reason"], string> = {
+    "unknown-identifier": t("identifiant inconnu", "unknown identifier"),
+    "gpu-count-not-offered": t("nombre de GPUs non proposé", "GPU count not offered"),
+    "invalid-tp": t("TP invalide", "invalid TP"),
+    "context-out-of-bounds": t("contexte hors bornes", "context out of bounds"),
+    "unsupported-format": t("format non supporté", "unsupported format"),
+    "dp-unavailable": t("mode DP indisponible", "DP mode unavailable"),
+    "invalid-value": t("valeur invalide ou arrondie", "invalid or rounded value"),
+  };
+  const catalogue = a.parameter === "model" ? models : a.parameter === "gpu" ? cfg.gpus : a.parameter === "eng" ? cfg.engines : [];
+  const retained = catalogue.find((x) => x.id === a.retained)?.name ?? a.retained ?? t("valeur par défaut", "default value");
+  return t(`Lien : ${names[a.parameter] ?? a.parameter} « ${a.received} » — ${reasons[a.reason]} → ${retained}.`,
+    `Link: ${names[a.parameter] ?? a.parameter} “${a.received}” — ${reasons[a.reason]} → ${retained}.`);
+}
+
 export type QueryParams = Record<string, string | undefined>;
 
 /** Context length within the accepted range, rounded to a whole token; the fallback when missing or invalid. */
@@ -60,7 +93,7 @@ const positive = (v: string | undefined) => {
 };
 
 /** Build a valid scenario from potentially incomplete or outdated URL parameters. */
-export function scenarioFromQuery(cfg: AppConfig, models: ModelSpec[], q: QueryParams): Scenario {
+export function scenarioFromQuery(cfg: AppConfig, models: ModelSpec[], q: QueryParams): { scenario: Scenario; adjustments: ScenarioAdjustment[] } {
   const d = cfg.defaults;
   const model = models.find((m) => m.id === q.model) ?? models.find((m) => m.id === d.model) ?? models[0];
   const gpu = cfg.gpus.find((g) => g.id === q.gpu) ?? cfg.gpus.find((g) => g.id === d.gpu) ?? cfg.gpus[0];
@@ -82,8 +115,11 @@ export function scenarioFromQuery(cfg: AppConfig, models: ModelSpec[], q: QueryP
     const n = positive(v);
     return n === undefined ? undefined : Math.max(1, Math.round(n));
   };
-  return {
+  const scenario: Scenario = {
     start: q.start === "load" ? "load" : "hardware",
+    tab: q.tab === undefined ? undefined : q.tab === "workload" ? "sizing" : ["detail", "perf", "sizing", "compare", "import"].includes(q.tab ?? "") ? q.tab as TabId : q.start === "load" ? "sizing" : "detail",
+    sizingObjective: q.obj === "sessions" ? "sessions" : "load",
+    targetSessions: positive(q.ns) === undefined ? 32 : Math.ceil(positive(q.ns)!),
     modelId: model.id,
     ctx: clampContext(numParam(q.ctx), d.contextTokens),
     gpuId: gpu.id,
@@ -107,6 +143,35 @@ export function scenarioFromQuery(cfg: AppConfig, models: ModelSpec[], q: QueryP
     },
     priceUsd: positive(q.usd),
   };
+  const adjustments: ScenarioAdjustment[] = [];
+  const record = (parameter: string, retained: string | number | undefined, reason: ScenarioAdjustment["reason"], numeric = false) => {
+    const received = q[parameter];
+    if (received === undefined) return;
+    if (numeric && numParam(received) !== undefined && numParam(received) === retained) return;
+    if (retained !== undefined && received === String(retained)) return;
+    adjustments.push({ parameter, received, retained: retained === undefined ? null : String(retained), reason });
+  };
+  for (const [parameter, retained] of [["model", model.id], ["gpu", gpu.id], ["eng", engine.id]] as const) record(parameter, retained, "unknown-identifier");
+  record("n", gpuCount, "gpu-count-not-offered", true);
+  record("mode", mode, q.mode === "dp-ep" ? "dp-unavailable" : "invalid-value");
+  if (q.p !== undefined && q.mode === undefined) {
+    const legacy = q.p === "dp-attention" ? "dp-ep" : q.p === "tp" || q.p === "pp" ? "tp-pp" : undefined;
+    if (legacy === undefined || legacy !== mode) record("p", mode, legacy ? "dp-unavailable" : "invalid-value");
+  }
+  record("tp", tp, "invalid-tp", true);
+  record("ctx", scenario.ctx, "context-out-of-bounds", true);
+  record("w", scenario.wf, cfg.weightFormats.some((f) => f.id === q.w) ? "unsupported-format" : "unknown-identifier");
+  record("kv", scenario.kf, cfg.kvCacheFormats.some((f) => f.id === q.kv) ? "unsupported-format" : "unknown-identifier");
+  for (const [parameter, retained] of [
+    ["r", scenario.reservePct], ["mem", scenario.memGiB], ["off", scenario.offloadGiB],
+    ["mbt", scenario.batchedTokens], ["ovh", scenario.overheadGiB], ["in", scenario.workload.inputTokens],
+    ["out", scenario.workload.outputTokens], ["rps", scenario.workload.requestsPerSec],
+    ["ttft", scenario.workload.ttftSeconds], ["itl", scenario.workload.itlMs], ["usd", scenario.priceUsd], ["ns", scenario.targetSessions],
+  ] as const) record(parameter, retained, "invalid-value", true);
+  record("start", scenario.start, "invalid-value");
+  if (q.tab !== "workload") record("tab", scenario.tab, "invalid-value");
+  record("obj", scenario.sizingObjective, "invalid-value");
+  return { scenario, adjustments };
 }
 
 export function scenarioToQuery(s: Scenario): string {
@@ -123,6 +188,10 @@ export function scenarioToQuery(s: Scenario): string {
     r: String(s.reservePct),
   });
   if (s.start === "load") q.set("start", "load");
+  // An explicit default tab must override the recipient's browser preference too.
+  if (s.tab) q.set("tab", s.tab);
+  if (s.sizingObjective === "sessions") q.set("obj", "sessions");
+  if (s.targetSessions !== undefined && s.targetSessions !== 32) q.set("ns", String(s.targetSessions));
   if (s.memGiB) q.set("mem", String(s.memGiB));
   if (s.offloadGiB) q.set("off", String(s.offloadGiB));
   if (s.batchedTokens) q.set("mbt", String(s.batchedTokens));
