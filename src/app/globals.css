@@ -798,8 +798,8 @@ input[type="range"].range-error {
 }
 
 @media (max-width: 520px) {
-  .table th:nth-child(3),
-  .table td:nth-child(3) {
+  .table:not(.sizing-table) th:nth-child(3),
+  .table:not(.sizing-table) td:nth-child(3) {
     display: none;
   }
 }
