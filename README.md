@@ -12,14 +12,14 @@ French and English interface · light, dark or system theme · shareable URLs ·
 |---|---|
 | Does the model fit? How much KV cache per request, how many concurrent sessions? | Indicators, memory bar, **Detail** tab |
 | How fast? Tokens per second per session, in aggregate and per GPU; prefill time | **Throughput** tab |
-| How many GPUs for N requests per second within TTFT and ITL targets, at what cost? Aggregated or prefill/decode disaggregated (llm-d)? | **Load and SLOs** tab |
-| Fewest GPUs of each type for N sessions; longest context for N sessions | **Sizing** tab |
+| How many GPUs for N requests per second within TTFT and ITL targets, at what cost? Aggregated or prefill/decode disaggregated (llm-d)? | **Sizing → Load and latency** (or **Start from load**) |
+| Cheapest deployment or fewest GPUs for N full-context sessions, including replicas | **Sizing → Concurrent sessions** |
 | Which of several setups is best? | **Comparison** tab (up to six pinned scenarios) |
 | What about a model that is not in the list? | **Import a model** tab, by Hugging Face repository |
 
-| Load and SLOs | Unusual attention layouts (DeepSeek V4, 8 × B200, DP-attention) |
+| Load-first sizing | Unusual attention layouts (DeepSeek V4, 8 × B200, DP-attention) |
 |---|---|
-| ![Load and SLOs tab: concurrency, TTFT, ITL, aggregated and disaggregated plans, cards ranked by cost](docs/images/load-slos.png) | ![Results for DeepSeek V4 Flash: compressed attention layers, sessions by context, launch command](docs/images/results.png) |
+| ![Load-first sizing: workload inputs and replica-aware card recommendations ranked by cost](docs/images/load-slos.png) | ![Results for DeepSeek V4 Flash: compressed attention layers, sessions by context, launch command](docs/images/results.png) |
 
 ## Quick start
 
@@ -86,6 +86,10 @@ KV per request follows each model's attention layout:
 | Linear / SSM (Mamba, DeltaNet) | Constant state per request, whatever the context |
 
 Parallelism changes where it lands. TP shards KV heads and replicates them beyond their count, and replicates MLA latents. PP sizes the most loaded stage. DP-attention keeps each request on one GPU and shards only routed experts.
+
+Choose **Start from hardware** to inspect an instance, or **Start from load** (`?start=load`) to enter a model, average prompt/output lengths, request rate and latency targets. Hardware settings stay in a closed **Hardware** section and the recommendation table appears immediately. Applying a row returns to hardware mode with one instance configured; the table's replicas describe the complete deployment.
+
+The five result tabs are **Detail**, **Throughput**, **Sizing**, **Comparison** and **Import a model**. Sizing has two objectives sharing one table: **Load and latency** (average requests, SLOs, aggregated versus P/D deployment) and **Concurrent sessions** (worst-case full contexts, with replicas). Sort by hourly cost (default) or total GPUs, and filter by card group. Memory errors link directly to the minimum one-session plan at the current context.
 
 The workload model is first order. Each request holds its prompt plus half its output in KV on average. Prefills take a share of compute and slow decoding. Little's law gives the concurrency, then replicas share the traffic. Formulas, engine profiles and assumptions are in [docs/calculation.md](docs/calculation.md).
 

@@ -15,7 +15,7 @@ What the estimator computes, the formulas behind each figure, and how engine pro
 | Formats | BF16, FP16, FP8, INT8, INT4, MXFP4, NVFP4 weights; BF16, FP16, FP8, NVFP4 KV |
 | Reserve | Percentage of each GPU left outside the engine: `1 − --gpu-memory-utilization` (vLLM) or `1 − --mem-fraction-static` (SGLang) |
 | Advanced | Visible memory per GPU from `nvidia-smi` / `amd-smi`, tokens per scheduling step, measured activation and runtime memory, KV offload to CPU RAM |
-| Workload | Average prompt and output tokens, request rate, TTFT and ITL targets, price per GPU-hour (Load and SLOs tab) |
+| Workload | Average prompt and output tokens, request rate, TTFT and ITL targets, price per GPU-hour (Sizing → Load and latency, also available in the load-first sidebar) |
 
 The URL stores the scenario settings for sharing. Models imported only into browser storage must also be available in the receiving browser.
 
@@ -26,7 +26,7 @@ The URL stores the scenario settings for sharing. Models imported only into brow
 1. **Topology**: the count fills whole servers (a multiple of `maxGpusPerNode`) or fits in one scale-up domain (`nvlinkDomain`). 12, 24 and 48 on GB200 and GB300 NVL72 (trays of 4) and GH200 (4 per node); 24 and 48 on 8-GPU servers, HGX or PCIe.
 2. **Layout**: at least one layout the sizing tables would test, a valid TP degree that divides the count (within the scale-up domain or the server) with the rest in PP, or DP-attention + EP for a MoE, has no blocking parallelism error for the model and engine: TP or PP unsupported, heads not divisible, PP above the layer count, DP-attention unavailable or expert parameters unknown.
 
-Format, context and capacity errors do not hide a size: they do not depend on the layout, or they change with the context and the reserve, and a larger instance is often what makes the model fit. A link or a model, card or engine change that lands on a size no longer offered falls back to the default count (links) or to 8 (interface, with a notice). Inverse and workload sizing walk the same list, so they can recommend 12, 24 or 48.
+Format, context and capacity errors do not hide a size: they do not depend on the layout, or they change with the context and the reserve, and a larger instance is often what makes the model fit. A link or a model, card or engine change that lands on a size no longer offered falls back to the default count (links) or to 8 (interface, with a notice). Both sizing objectives walk the same list, so they can recommend 12, 24 or 48.
 
 ## Results and limitations
 
@@ -34,8 +34,8 @@ The main indicators show model weights (total and per GPU), logical and replicat
 
 - Per-layer KV details, sessions at each context step and an indicative `vllm serve` command.
 - Estimated per-session and aggregate throughput, prefill time, memory/compute limits and CPU offload.
-- Load and SLOs: concurrency needed against capacity at the average request length, TTFT, ITL, replicas, aggregated versus prefill/decode-disaggregated serving with the KV traffic between pools, cost per hour and per million tokens, and the cheapest instance shape on every card.
-- Inverse sizing: minimum GPU count and parallelism for a target session count, plus the maximum context on the current configuration. Both sizing tables filter by card group.
+- Sizing → Load and latency: concurrency needed against capacity at the average request length, TTFT, ITL, replicas, aggregated versus prefill/decode-disaggregated serving with the KV traffic between pools, cost per hour and per million tokens, and the cheapest instance shape on every card.
+- Sizing → Concurrent sessions: replica-aware deployment for a target number of full-context sessions. Both objectives share the same card table, group filters and cost/GPU sort selector.
 - Up to six pinned scenarios for comparison, and a JSON export.
 
 Unsupported options are disabled with a reason on hover. Limited or unverified options remain selectable with warnings. Format choices adjust when switching model, GPU or engine, with a notice explaining the fallback. Warnings are ordered by severity.
@@ -96,3 +96,15 @@ Server capabilities (PagedAttention, continuous batching, tensor parallelism and
 - Kernels apply sliding-window attention, but the library does not reclaim pages outside the window, so the profile applies no VRAM savings.
 
 Pool preallocation, PP, DP-attention and offload remain unverified in this profile.
+
+## Unified sizing and entry paths
+
+The default entry path starts from hardware. `start=load` is URL-serializable and opens Sizing immediately, placing the shared workload fields and context in the left column, with hardware settings collapsed. The card table comes before the current-instance and aggregated/P/D analysis in this path. Applying a card configures **one instance**, returns to hardware mode and displays a notice; replicas remain a deployment plan, not the instance's GPU count. Legacy saved tabs `workload` and `sizing` both open Sizing. Existing workload URL parameters, JSON report fields, API and CLI semantics are unchanged.
+
+Both objectives enumerate the same valid TP×PP and DP-attention instance shapes. Load and latency uses the existing average-resident-KV and fixed-point load model, finding the minimum replica count that meets TTFT and ITL. Concurrent sessions instead uses full-context KV capacity (capped by the engine's sequence limit per scheduler), with `replicas = ceil(target / capacityPerInstance)` and total capacity `replicas × capacityPerInstance`. It does not apply the workload SLOs or arrival rate. The displayed required concurrency and capacity cover all replicas.
+
+For full-context sessions, TTFT is the idle prefill time for a whole context. ITL and output token cost use decode throughput at `ceil(target / replicas)` concurrent sessions per instance, without competing prefills. Hourly cost is total GPUs times the card's indicative hourly price. Output token cost is hourly cost divided by the aggregate decode tokens per hour, multiplied by one million. Load objective token cost instead uses the requested output traffic. The entered price and visible-memory override apply only to the selected card type.
+
+Each card keeps the instance shape with the fewest total GPUs, then lowest hourly cost, then a shape without PP. Across cards, hourly cost is the default ranking (unknown prices follow known prices); GPU sort ranks total GPUs first, then hourly cost, then no PP. Unreachable cards come last. If a winning PP shape has a TP-only replica deployment within ±10% cost, its note flags that alternative. Formats are retained when supported and fallbacks are noted.
+
+For Qwen3-32B in BF16 with BF16 KV, vLLM, 10% reserve and 32 sessions at 32,768 tokens on H100 SXM, TP1×PP5 remains the cheapest modeled option: 5 GPUs, capacity 34, $16.50/h. TP-only replicas need at least 6 GPUs ($19.80/h, 20% more), so the ±10% note does not apply. At equal total GPUs and price, TP without PP wins; for example, 80 sessions select three TP4 instances (12 GPUs, capacity 81). This is a memory/cost recommendation, not a latency guarantee: the sessions objective exposes TTFT and ITL for that reason.

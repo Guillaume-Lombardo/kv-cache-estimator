@@ -247,72 +247,101 @@ export interface WorkloadSizingRow {
   note?: string;
 }
 
-/**
- * For each GPU type: the instance shape (GPU count, TP/PP or DP-attention) that serves the workload within
- * the targets with the fewest GPUs in total (replicas included); ties go to the lowest ITL.
- * Only configurations without blocking errors at the selected context are considered.
- */
-export function sizeForWorkload(cfg: AppConfig, base: SizingBase, w: Workload, baseGpuId?: string, priceOverride?: number): WorkloadSizingRow[] {
+export type SizingObjective = "load" | "sessions";
+export type SizingSort = "cost" | "gpus";
+
+export interface DeploymentSizingRow extends WorkloadSizingRow {
+  /** Capacity across all replicas, at the objective's request length. */
+  capacity: number;
+  /** Required concurrency across replicas (sessions: the requested target). */
+  concurrency: number;
+}
+
+const pipeline = (r: WorkloadSizingRow) => r.mode === "tp-pp" && r.gpuCount !== null && r.gpuCount / r.tp > 1;
+
+/** Reachable rows first; missing prices follow known prices in cost order. */
+export function sortSizingRows<T extends WorkloadSizingRow>(rows: T[], sort: SizingSort = "cost"): T[] {
+  const price = (r: T) => r.cost?.usdPerHour ?? Infinity;
+  const costDifference = (a: T, b: T) => price(a) === price(b) ? 0 : price(a) < price(b) ? -1 : 1;
+  return [...rows].sort((a, b) =>
+    Number(a.gpus === null) - Number(b.gpus === null) ||
+    (sort === "cost" ? costDifference(a, b) : 0) ||
+    (a.gpus ?? Infinity) - (b.gpus ?? Infinity) ||
+    costDifference(a, b) || Number(pipeline(a)) - Number(pipeline(b)) ||
+    a.gpu.name.localeCompare(b.gpu.name),
+  );
+}
+
+/** Both objectives evaluate the same instance shapes, with identical replicas behind a router. */
+export function sizeForDeployment(
+  cfg: AppConfig, base: SizingBase, w: Workload,
+  options: { objective: SizingObjective; targetSessions?: number; sort?: SizingSort; baseGpuId?: string; priceOverride?: number },
+): DeploymentSizingRow[] {
   const t = tr(base.lang ?? "fr");
-  const rows: WorkloadSizingRow[] = cfg.gpus.map((gpu) => {
+  const target = Math.max(1, Math.ceil(options.targetSessions ?? 1));
+  const rows = cfg.gpus.map((gpu): DeploymentSizingRow => {
     const { wfId, kfId, notes } = formatsFor(cfg, base, gpu);
-    const price = gpu.id === baseGpuId && priceOverride ? priceOverride : gpu.priceUsdPerHour;
-    let best: { input: EstimateInput; plan: WorkloadAnalysis; gpus: number; unverified: boolean } | null = null;
+    const price = gpu.id === options.baseGpuId && options.priceOverride ? options.priceOverride : gpu.priceUsdPerHour;
+    const candidates: DeploymentSizingRow[] = [];
+    let best: DeploymentSizingRow | undefined;
     for (const n of gpuCountOptions(cfg, gpu, base.model, base.engine)) {
-      // A larger instance cannot use fewer GPUs than the best total found so far.
-      if (best && n > best.gpus) break;
-      for (const input of instanceInputs(cfg, base, gpu, n, baseGpuId)) {
+      if (best && n > best.gpus! * 1.1) break;
+      for (const input of instanceInputs(cfg, base, gpu, n, options.baseGpuId)) {
         const est = estimate(input);
         if (est.sessions < 1) continue;
         const issues = collectIssues(input, est, cfg.weightFormats);
         if (issues.some((i) => i.severity === "error")) continue;
-        const plan = analyzeWorkload(cfg, input, w, price);
-        if (!plan.aggregated) continue;
-        const unverified = issues.some((i) => i.unverifiedParallelism);
-        const gpus = plan.aggregated.gpus;
-        // Unverified parallelism ranks after verified configurations.
-        const better =
-          !best ||
-          (best.unverified && !unverified) ||
-          (best.unverified === unverified && (gpus < best.gpus || (gpus === best.gpus && plan.aggregated.load.itlMs < best.plan.aggregated!.load.itlMs)));
-        if (better) best = { input, plan, gpus, unverified };
+        let replicas: number, capacity: number, concurrency: number, ttftSeconds: number, itlMs: number;
+        let cost: Cost | null, disaggregatedGpus: number | null = null;
+        if (options.objective === "load") {
+          const plan = analyzeWorkload(cfg, input, w, price);
+          if (!plan.aggregated) continue;
+          const agg = plan.aggregated;
+          replicas = agg.replicas;
+          capacity = replicas * plan.model.capacity;
+          concurrency = replicas * agg.load.concurrency;
+          ttftSeconds = agg.load.ttftSeconds;
+          itlMs = agg.load.itlMs;
+          cost = plan.cost.aggregated;
+          disaggregatedGpus = plan.disaggregated?.gpus ?? null;
+        } else {
+          const schedulers = input.mode === "dp-ep" ? n : 1;
+          const perInstance = Math.min(est.sessions, runtimeDefaults(input.engine, gpu, input.memoryGiBOverride).maxNumSeqs * schedulers);
+          replicas = Math.ceil(target / perInstance);
+          capacity = replicas * perInstance;
+          concurrency = target;
+          const perf = estimatePerf(input, est, cfg.performance);
+          const rate = perf.at(Math.ceil(target / replicas));
+          ttftSeconds = perf.prefillSeconds;
+          itlMs = rate.stepMs;
+          const usdPerHour = price ? replicas * n * price : null;
+          // Saturated decode throughput at the requested concurrency; no arrival-rate or SLO assumption.
+          const usdPerMillion = usdPerHour === null ? null : usdPerHour / (replicas * rate.tokPerSecTotal * 3600) * 1e6;
+          cost = usdPerHour === null ? null : { usdPerHour, usdPerMillionOutput: usdPerMillion!, usdPerMillionTotal: usdPerMillion! };
+        }
+        const row: DeploymentSizingRow = {
+          gpu, gpuCount: n, mode: input.mode, tp: input.tp, weightFormat: wfId, kvFormat: kfId,
+          replicas, gpus: replicas * n, capacity, concurrency, ttftSeconds, itlMs, cost, disaggregatedGpus,
+          note: [...notes, ...(issues.some((i) => i.unverifiedParallelism) ? [t("parallélisme non vérifié", "unverified parallelism")] : [])].join(", ") || undefined,
+        };
+        candidates.push(row);
+        best = sortSizingRows(best ? [best, row] : [row], "gpus")[0];
       }
     }
-    if (!best)
-      return {
-        gpu,
-        gpuCount: null,
-        mode: "tp-pp",
-        tp: 1,
-        weightFormat: wfId,
-        kvFormat: kfId,
-        replicas: 0,
-        gpus: null,
-        disaggregatedGpus: null,
-        itlMs: null,
-        ttftSeconds: null,
-        cost: null,
-        note: [...notes, t("objectifs inatteignables", "targets unreachable")].join(", "),
-      };
-    const agg = best.plan.aggregated!;
-    return {
-      gpu,
-      gpuCount: best.input.gpuCount,
-      mode: best.input.mode,
-      tp: best.input.tp,
-      weightFormat: wfId,
-      kvFormat: kfId,
-      replicas: agg.replicas,
-      gpus: agg.gpus,
-      disaggregatedGpus: best.plan.disaggregated?.gpus ?? null,
-      itlMs: agg.load.itlMs,
-      ttftSeconds: agg.load.ttftSeconds,
-      cost: best.plan.cost.aggregated,
-      note: [...notes, ...(best.unverified ? [t("parallélisme non vérifié", "unverified parallelism")] : [])].join(", ") || undefined,
+    if (!best) return {
+      gpu, gpuCount: null, mode: "tp-pp", tp: 1, weightFormat: wfId, kvFormat: kfId,
+      replicas: 0, gpus: null, capacity: 0, concurrency: 0, disaggregatedGpus: null, itlMs: null, ttftSeconds: null, cost: null,
+      note: [...notes, t("objectifs inatteignables", "targets unreachable")].join(", "),
     };
+    if (pipeline(best) && candidates.some((r) => r.mode === "tp-pp" && !pipeline(r) && r.gpus! >= best!.gpus! * 0.9 && r.gpus! <= best!.gpus! * 1.1)) {
+      best = { ...best, note: [best.note, t("PP > 1 : TP seul avec répliques disponible à coût ± 10 %", "PP > 1: TP-only replicas available within 10% cost")].filter(Boolean).join(", ") };
+    }
+    return best;
   });
-  // Cheapest first when every reachable row has a price, otherwise fewest GPUs; unreachable rows last.
-  const allPriced = rows.every((r) => r.gpus === null || r.cost);
-  const key = (r: WorkloadSizingRow) => (r.gpus === null ? Infinity : allPriced ? r.cost!.usdPerHour : r.gpus);
-  return rows.sort((a, b) => key(a) - key(b));
+  return sortSizingRows(rows, options.sort);
+}
+
+/** Compatible workload-only entry point used by comparison and existing callers. */
+export function sizeForWorkload(cfg: AppConfig, base: SizingBase, w: Workload, baseGpuId?: string, priceOverride?: number): WorkloadSizingRow[] {
+  return sizeForDeployment(cfg, base, w, { objective: "load", baseGpuId, priceOverride });
 }

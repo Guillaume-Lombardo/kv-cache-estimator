@@ -145,7 +145,7 @@ export function MemoryBar({ est, gpuCount }: { est: Estimate; gpuCount: number }
   );
 }
 
-export function IssuesPanel({ issues, notices }: { issues: Issue[]; notices: string[] }) {
+export function IssuesPanel({ issues, notices, onFindMinimum }: { issues: Issue[]; notices: string[]; onFindMinimum?: () => void }) {
   const { t } = usePrefs();
   if (!issues.length && !notices.length) return null;
   const hasError = issues.some((i) => i.severity === "error");
@@ -176,6 +176,9 @@ export function IssuesPanel({ issues, notices }: { issues: Issue[]; notices: str
             <div>
               <strong>{i.title}</strong>
               {i.detail && <p>{i.detail}</p>}
+              {onFindMinimum && (i.code === "weights-do-not-fit" || i.code === "no-room-for-one-request") && (
+                <button className="btn" onClick={onFindMinimum}>{t("Trouver la configuration minimale", "Find the minimum configuration")}</button>
+              )}
             </div>
           </li>
         ))}

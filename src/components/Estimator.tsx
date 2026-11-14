@@ -31,13 +31,12 @@ import { IssuesPanel, Kpi, KvBreakdown, MemoryBar, ModelCard, SessionsChart } fr
 import { PerfPanel } from "./PerfPanel";
 import { PrefsToggles, usePrefs } from "./Prefs";
 import { SizingPanel, type SizingChoice } from "./SizingPanel";
-import { WorkloadPanel } from "./WorkloadPanel";
+import { WorkloadFields } from "./WorkloadPanel";
 
 const STORAGE = { pinned: "kv-estimator:pinned", imported: "kv-estimator:imported", tab: "kv-estimator:tab" };
 const TABS = [
   { id: "detail", fr: "Détail", en: "Detail" },
   { id: "perf", fr: "Débit", en: "Throughput" },
-  { id: "workload", fr: "Charge et SLO", en: "Load and SLOs" },
   { id: "sizing", fr: "Dimensionnement", en: "Sizing" },
   { id: "compare", fr: "Comparaison", en: "Comparison" },
   { id: "import", fr: "Importer un modèle", en: "Import a model" },
@@ -47,7 +46,9 @@ type TabId = (typeof TABS)[number]["id"];
 function readStorage<T>(key: string, fallback: T): T {
   try {
     const v = window.localStorage.getItem(key);
-    return v ? (JSON.parse(v) as T) : fallback;
+    if (!v) return fallback;
+    try { return JSON.parse(v) as T; }
+    catch { return key === STORAGE.tab ? v as T : fallback; }
   } catch {
     return fallback;
   }
@@ -75,7 +76,11 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
   const [s, setS] = useState<Scenario>(() => scenarioFromQuery(config, config.models, initial));
   const [notices, setNotices] = useState<Notice[]>([]);
   const [pinned, setPinned] = useState<Scenario[]>([]);
-  const [tab, setTab] = useState<TabId>("detail");
+  const [tab, setTab] = useState<TabId>(initial.start === "load" ? "sizing" : "detail");
+  const [objective, setObjective] = useState<"load" | "sessions">("load");
+  const [target, setTarget] = useState(32);
+  const [sizingReset, setSizingReset] = useState(0);
+  const loadFirst = s.start === "load";
   const [linkCopied, setLinkCopied] = useState(false);
 
   // --- Browser-specific data (after hydration)
@@ -83,8 +88,9 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
     const imp = readStorage<ModelSource[]>(STORAGE.imported, []);
     setImported(imp);
     setPinned(readStorage<Scenario[]>(STORAGE.pinned, []));
-    const t = readStorage<TabId>(STORAGE.tab, "detail");
-    if (TABS.some((x) => x.id === t)) setTab(t);
+    const saved = readStorage<string>(STORAGE.tab, "detail");
+    const next = saved === "workload" ? "sizing" : saved;
+    if (initial.start !== "load" && TABS.some((x) => x.id === next)) setTab(next as TabId);
     // Link to a model imported in this browser.
     if (initial.model && imp.some((m) => m.id === initial.model)) setS(scenarioFromQuery(config, [...config.models, ...localize(imp, lang)], initial));
   }, []);
@@ -195,12 +201,14 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
   const applySizing = (c: SizingChoice) => {
     const sameGpu = c.gpuId === s.gpuId;
     setNotices([
-      notice("Configuration appliquée depuis le dimensionnement.", "Configuration applied from sizing."),
+      loadFirst
+        ? notice("Configuration appliquée depuis la charge", "Configuration applied from load")
+        : notice("Configuration appliquée depuis le dimensionnement.", "Configuration applied from sizing."),
       ...(!sameGpu && s.memGiB !== undefined
         ? [notice("Mémoire visible personnalisée réinitialisée (autre carte).", "Custom visible memory reset (different card).")]
         : []),
     ]);
-    setS({ ...s, ...c, memGiB: sameGpu ? s.memGiB : undefined, priceUsd: sameGpu ? s.priceUsd : undefined });
+    setS({ ...s, ...c, start: "hardware", memGiB: sameGpu ? s.memGiB : undefined, priceUsd: sameGpu ? s.priceUsd : undefined });
   };
 
   const pin = () => {
@@ -397,7 +405,11 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
         </div>
       </header>
 
-      <main className="layout">
+      <div className="start-selector" role="group" aria-label={t("Point de départ", "Starting point")}>
+        <button className={`btn${!loadFirst ? " primary" : ""}`} aria-pressed={!loadFirst} onClick={() => update({ start: "hardware" })}>{t("Partir du matériel", "Start from hardware")}</button>
+        <button className={`btn${loadFirst ? " primary" : ""}`} aria-pressed={loadFirst} onClick={() => { update({ start: "load" }); setObjective("load"); selectTab("sizing"); }}>{t("Partir de la charge", "Start from load")}</button>
+      </div>
+      <main className={`layout${loadFirst ? " load-first" : ""}`}>
         {/* ------------------------------------------------ Parameters */}
         <section className="panel form" aria-label={t("Paramètres", "Settings")}>
           <div className="field">
@@ -406,6 +418,12 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
             <ModelCard model={model} />
           </div>
 
+          {loadFirst && <>
+            <WorkloadFields input={input} workload={s.workload} priceUsd={s.priceUsd} onChange={(workload, priceUsd) => update({ workload, priceUsd })} />
+            <ContextInput model={model} value={ctx} onChange={(v) => update({ ctx: v })} />
+          </>}
+          <details className="hardware-settings" open={!loadFirst}>
+            <summary className="field-label">{t("Matériel", "Hardware")}</summary>
           <div className="field">
             <GpuPicker gpus={config.gpus} value={s.gpuId} onChange={setGpu} />
             {gpu.notes.length > 0 && (
@@ -470,7 +488,7 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
             {limitationLine(config.kvCacheFormats.map((f) => ({ label: f.label, s: kvSupport(gpu, engine, f.id, lang) })))}
           </div>
 
-          <ContextInput model={model} value={ctx} onChange={(v) => update({ ctx: v })} />
+          {!loadFirst && <ContextInput model={model} value={ctx} onChange={(v) => update({ ctx: v })} />}
 
           <div className="field">
             <label className="field-label" htmlFor="reserve">
@@ -562,6 +580,7 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
               {engine.flags.kvOffload && t(`Option : ${engine.flags.kvOffload}.`, `Option: ${engine.flags.kvOffload}.`)}
             </p>
           </details>
+          </details>
         </section>
 
         {/* ------------------------------------------------ Results */}
@@ -578,6 +597,7 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
             </button>
           </div>
 
+          {!loadFirst && <>
           <div className="kpis">
             <Kpi
               title={t("Poids du modèle", "Model weights")}
@@ -670,9 +690,13 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
 
           <MemoryBar est={est} gpuCount={s.gpuCount} />
 
-          <IssuesPanel issues={issues} notices={notices.map((n) => n[lang])} />
+          <IssuesPanel issues={issues} notices={notices.map((n) => n[lang])} onFindMinimum={() => {
+            setObjective("sessions"); setTarget(1); setSizingReset((n) => n + 1); selectTab("sizing");
+            requestAnimationFrame(() => document.getElementById("sizing-panel")?.scrollIntoView({ block: "start", behavior: "smooth" }));
+          }} />
+          </>}
 
-          <div className="panel">
+          <div className="panel" id="sizing-panel">
             <div className="tabs" role="tablist">
               {TABS.map((x) => (
                 <button key={x.id} type="button" role="tab" aria-selected={tab === x.id} className={`tab${tab === x.id ? " active" : ""}`} onClick={() => selectTab(x.id)}>
@@ -705,17 +729,9 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
                 </>
               )}
               {tab === "perf" && <PerfPanel input={input} est={est} perf={config.performance} />}
-              {tab === "workload" && (
-                <WorkloadPanel
-                  config={config}
-                  input={input}
-                  workload={s.workload}
-                  priceUsd={s.priceUsd}
-                  onChange={(workload, priceUsd) => update({ workload, priceUsd })}
-                  onApply={applySizing}
-                />
-              )}
-              {tab === "sizing" && <SizingPanel config={config} input={input} onApply={applySizing} />}
+              {tab === "sizing" && <SizingPanel key={sizingReset} config={config} input={input} workload={s.workload} priceUsd={s.priceUsd}
+                onChange={(workload, priceUsd) => update({ workload, priceUsd })} onApply={applySizing}
+                objective={objective} onObjectiveChange={setObjective} target={target} onTargetChange={setTarget} loadFirst={loadFirst} />}
               {tab === "compare" && (
                 <ComparePanel config={config} models={models} current={s} pinned={pinned} onPin={pin} onRemove={unpin} onLoad={loadScenario} />
               )}
@@ -779,8 +795,8 @@ const ASSUMPTIONS: Notice[] = [
     "Engine memory = visible memory − reserve. vLLM also takes the activation peak (tokens per step × estimated MLP width), sampler logits and a fixed runtime amount from it; SGLang takes them from the reserve.",
   ),
   notice(
-    "Sessions = ⌊mémoire libre par GPU ÷ KV par requête et par GPU⌋, toutes au contexte maximal (pire cas). L'onglet Charge et SLO utilise la longueur moyenne des requêtes.",
-    "Sessions = ⌊free memory per GPU ÷ KV per request per GPU⌋, all at maximum context (worst case). The Load and SLOs tab uses the average request length.",
+    "Sessions = ⌊mémoire libre par GPU ÷ KV par requête et par GPU⌋, toutes au contexte maximal (pire cas). L'objectif Charge et latence du dimensionnement utilise la longueur moyenne des requêtes.",
+    "Sessions = ⌊free memory per GPU ÷ KV per request per GPU⌋, all at maximum context (worst case). The Load and latency sizing objective uses the average request length.",
   ),
   notice(
     "Offload CPU : le KV déchargé ne sert qu'aux sessions en attente ou préemptées, il n'augmente pas la concurrence de décodage.",
