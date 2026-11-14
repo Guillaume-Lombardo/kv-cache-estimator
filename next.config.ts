@@ -24,6 +24,7 @@ function basePathFromEnv(): string {
 const basePath = basePathFromEnv();
 
 const nextConfig: NextConfig = {
+  agentRules: false,
   // Read the configuration on the server at startup (see src/lib/load-config.ts).
   output: "standalone",
   basePath,
