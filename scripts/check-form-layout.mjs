@@ -55,6 +55,21 @@ try {
         await reserve.focus();
         const r = await box(reserve), s = await box(page.locator(".result-summary"));
         assert.ok(r.y >= 0 && r.y + r.height <= s.y, `${name}: focused reserve hidden behind the summary`);
+        await page.getByRole("button", { name: lang === "fr" ? "Switch to English" : "Passer en français" }).focus();
+        for (let i = 0; i < 100; i++) {
+          await page.keyboard.press("Tab");
+          await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          const focus = await page.evaluate(() => {
+            const el = document.activeElement;
+            if (!el || el === document.body || el.classList.contains("result-summary")) return null;
+            const rect = el.getBoundingClientRect();
+            const bar = document.querySelector(".result-summary").getBoundingClientRect();
+            return { label: el.getAttribute("aria-label") || el.id || el.textContent.trim(), top: rect.top, bottom: rect.bottom, limit: bar.top };
+          });
+          const visible = !focus || (focus.top >= 0 && focus.bottom <= focus.limit + 1);
+          if (!visible && screenshots) await page.screenshot({ path: `${screenshots}/${name}-hidden-focus.png` });
+          assert.ok(visible, `${name}: keyboard focus obscured: ${JSON.stringify(focus)}`);
+        }
       }
       console.log(`PASS ${name}: field gaps, advanced controls, visible results, footer, no overflow`);
     } catch (error) {
