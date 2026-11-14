@@ -1251,6 +1251,10 @@ h3 {
   color: var(--muted);
 }
 @media (max-width: 600px) {
+  .compare-panel .table th:nth-child(3),
+  .compare-panel .table td:nth-child(3) {
+    display: table-cell;
+  }
   .compare-panel .table.compare tr > :first-child {
     white-space: normal;
     min-width: 145px;
