@@ -430,6 +430,7 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
           </>}
           <details className="hardware-settings" open={!loadFirst}>
             <summary className="field-label">{t("Matériel", "Hardware")}</summary>
+          <div className="hardware-fields">
           <div className="field">
             <GpuPicker gpus={config.gpus} value={s.gpuId} onChange={setGpu} />
             {gpu.notes.length > 0 && (
@@ -500,6 +501,7 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
 
           <details className="field advanced" open={s.memGiB !== undefined || s.offloadGiB > 0 || s.batchedTokens !== undefined || s.overheadGiB !== undefined}>
             <summary className="field-label">{t(`Options avancées · réserve ${s.reservePct} %`, `Advanced options · reserve ${s.reservePct}%`)}</summary>
+          <div className="advanced-fields">
           <div className="field">
             <label className="field-label" htmlFor="reserve">
               {t("Réserve hors moteur par GPU", "Reserve outside the engine per GPU")} <strong className="value">{t(`${s.reservePct} %`, `${s.reservePct}%`)}</strong>
@@ -587,7 +589,9 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
               {t(`Lien CPU↔GPU : ${gpu.hostLinkLabel} (${gpu.hostLinkGBs} Go/s).`, `CPU↔GPU link: ${gpu.hostLinkLabel} (${gpu.hostLinkGBs} GB/s).`)}{" "}
               {engine.flags.kvOffload && t(`Option : ${engine.flags.kvOffload}.`, `Option: ${engine.flags.kvOffload}.`)}
             </p>
+          </div>
           </details>
+          </div>
           </details>
         </section>
 
