@@ -1213,3 +1213,51 @@ h3 {
   font-size: 12px;
   color: var(--muted);
 }
+
+/* --- Compare (L5) --- */
+.compare-panel {
+  min-width: 0;
+  max-width: 100%;
+}
+.compare-options,
+.compare-options label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.compare-options label {
+  font-size: 13px;
+}
+.compare-options input {
+  accent-color: var(--accent);
+}
+.compare-panel .table-wrap {
+  max-width: 100%;
+}
+.compare-panel .compare-different > * {
+  background: var(--accent-soft);
+}
+.compare-panel .compare-best {
+  color: var(--good);
+  font-weight: 700;
+}
+.compare-panel .compare-workloads td {
+  min-width: 180px;
+  max-width: 260px;
+  white-space: normal;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+@media (max-width: 600px) {
+  .compare-panel .table.compare tr > :first-child {
+    white-space: normal;
+    min-width: 145px;
+  }
+  .compare-panel .row-between .btn {
+    max-width: 100%;
+    white-space: normal;
+  }
+}
+/* --- End Compare (L5) --- */
