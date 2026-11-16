@@ -69,7 +69,7 @@ const usable = (s: Support) => s.level !== "unsupported";
 type Notice = Record<Lang, string>;
 const notice = (fr: string, en: string): Notice => ({ fr, en });
 
-export function Estimator({ source, configPath, initial }: { source: ConfigSource; configPath: string; initial: QueryParams }) {
+export function Estimator({ source, initial }: { source: ConfigSource; initial: QueryParams }) {
   const { lang, t, fmt } = usePrefs();
   const config = useMemo(() => localize(source, lang), [source, lang]);
   const [imported, setImported] = useState<ModelSource[]>([]);
@@ -408,12 +408,12 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
           </div>
         </div>
         <div className="header-side">
-          <PrefsToggles />
-          <p className="config-path" title={configPath}>
+          <p className="config-counts">
             {config.models.length} {t("modèles", "models")}
             {imported.length ? ` + ${imported.length} ${t(`importé${imported.length > 1 ? "s" : ""}`, "imported")}` : ""} · {config.gpus.length} GPUs ·{" "}
-            {config.engines.length} {t("moteurs", "engines")} · <code>{configPath.split("/").slice(-2).join("/")}</code>
+            {config.engines.length} {t("moteurs", "engines")}
           </p>
+          <PrefsToggles />
         </div>
       </header>
 

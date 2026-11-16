@@ -126,25 +126,33 @@ h2 {
 .header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-end;
-  gap: 16px;
+  align-items: center;
+  gap: 12px 16px;
   flex-wrap: wrap;
   margin-bottom: 16px;
 }
-.config-path {
+.config-counts {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
+  text-align: right;
 }
 .header-side {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  margin-left: auto;
 }
 @media (max-width: 700px) {
   .header-side {
-    align-items: flex-start;
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+  .config-counts {
+    order: 1;
+    text-align: left;
   }
 }
 
@@ -154,7 +162,8 @@ h2 {
   gap: 8px;
   align-items: center;
 }
-.lang-toggle {
+/* .btn is declared later; the double class keeps this compact padding. */
+.btn.lang-toggle {
   display: inline-flex;
   gap: 2px;
   padding: 3px;
@@ -214,7 +223,7 @@ h2 {
 .form {
   min-width: 0;
   /* Leave room for the header (title and entry selector) before the page scrolls. */
-  max-height: calc(100dvh - 120px);
+  max-height: calc(100dvh - 100px);
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
