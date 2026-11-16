@@ -402,9 +402,9 @@ export function Estimator({ source, initial }: { source: ConfigSource; initial: 
       <header className="header">
         <div className="header-main">
           <h1>{t("Estimateur KV cache", "KV cache estimator")}</h1>
-          <div className="segmented start-selector" role="radiogroup" aria-label={t("Point de départ", "Starting point")}>
-            <button type="button" role="radio" aria-checked={!loadFirst} className={!loadFirst ? "on" : ""} onClick={() => update({ start: "hardware" })}>{t("Partir du matériel", "Start from hardware")}</button>
-            <button type="button" role="radio" aria-checked={loadFirst} className={loadFirst ? "on" : ""} onClick={() => { update({ start: "load" }); setObjective("load"); selectTab("sizing"); }}>{t("Partir de la charge", "Start from load")}</button>
+          <div className="segmented start-selector" role="group" aria-label={t("Point de départ", "Starting point")}>
+            <button type="button" aria-pressed={!loadFirst} className={!loadFirst ? "on" : ""} onClick={() => update({ start: "hardware" })}>{t("Partir du matériel", "Start from hardware")}</button>
+            <button type="button" aria-pressed={loadFirst} className={loadFirst ? "on" : ""} onClick={() => { update({ start: "load" }); setObjective("load"); selectTab("sizing"); }}>{t("Partir de la charge", "Start from load")}</button>
           </div>
         </div>
         <div className="header-side">
