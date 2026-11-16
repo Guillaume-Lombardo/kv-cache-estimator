@@ -69,7 +69,7 @@ const usable = (s: Support) => s.level !== "unsupported";
 type Notice = Record<Lang, string>;
 const notice = (fr: string, en: string): Notice => ({ fr, en });
 
-export function Estimator({ source, configPath, initial }: { source: ConfigSource; configPath: string; initial: QueryParams }) {
+export function Estimator({ source, initial }: { source: ConfigSource; initial: QueryParams }) {
   const { lang, t, fmt } = usePrefs();
   const config = useMemo(() => localize(source, lang), [source, lang]);
   const [imported, setImported] = useState<ModelSource[]>([]);
@@ -400,21 +400,23 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
   return (
     <div className="page">
       <header className="header">
-        <h1>{t("Estimateur KV cache", "KV cache estimator")}</h1>
+        <div className="header-main">
+          <h1>{t("Estimateur KV cache", "KV cache estimator")}</h1>
+          <div className="segmented start-selector" role="group" aria-label={t("Point de départ", "Starting point")}>
+            <button type="button" aria-pressed={!loadFirst} className={!loadFirst ? "on" : ""} onClick={() => update({ start: "hardware" })}>{t("Partir du matériel", "Start from hardware")}</button>
+            <button type="button" aria-pressed={loadFirst} className={loadFirst ? "on" : ""} onClick={() => { update({ start: "load" }); setObjective("load"); selectTab("sizing"); }}>{t("Partir de la charge", "Start from load")}</button>
+          </div>
+        </div>
         <div className="header-side">
-          <PrefsToggles />
-          <p className="config-path" title={configPath}>
+          <p className="config-counts">
             {config.models.length} {t("modèles", "models")}
             {imported.length ? ` + ${imported.length} ${t(`importé${imported.length > 1 ? "s" : ""}`, "imported")}` : ""} · {config.gpus.length} GPUs ·{" "}
-            {config.engines.length} {t("moteurs", "engines")} · <code>{configPath.split("/").slice(-2).join("/")}</code>
+            {config.engines.length} {t("moteurs", "engines")}
           </p>
+          <PrefsToggles />
         </div>
       </header>
 
-      <div className="start-selector" role="group" aria-label={t("Point de départ", "Starting point")}>
-        <button className={`btn${!loadFirst ? " primary" : ""}`} aria-pressed={!loadFirst} onClick={() => update({ start: "hardware" })}>{t("Partir du matériel", "Start from hardware")}</button>
-        <button className={`btn${loadFirst ? " primary" : ""}`} aria-pressed={loadFirst} onClick={() => { update({ start: "load" }); setObjective("load"); selectTab("sizing"); }}>{t("Partir de la charge", "Start from load")}</button>
-      </div>
       <main className={`layout${loadFirst ? " load-first" : ""}`}>
         {/* ------------------------------------------------ Parameters */}
         <section className="panel form" aria-label={t("Paramètres", "Settings")}>

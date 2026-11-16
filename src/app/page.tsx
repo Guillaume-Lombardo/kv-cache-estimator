@@ -27,5 +27,5 @@ export default async function Page({ searchParams }: { searchParams: SearchParam
 
   const sp = await searchParams;
   const initial: QueryParams = Object.fromEntries(Object.entries(sp).map(([k, v]) => [k, Array.isArray(v) ? v[0] : v]));
-  return <Estimator source={result.config} configPath={result.path} initial={initial} />;
+  return <Estimator source={result.config} initial={initial} />;
 }
