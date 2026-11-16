@@ -400,7 +400,13 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
   return (
     <div className="page">
       <header className="header">
-        <h1>{t("Estimateur KV cache", "KV cache estimator")}</h1>
+        <div className="header-main">
+          <h1>{t("Estimateur KV cache", "KV cache estimator")}</h1>
+          <div className="segmented start-selector" role="radiogroup" aria-label={t("Point de départ", "Starting point")}>
+            <button type="button" role="radio" aria-checked={!loadFirst} className={!loadFirst ? "on" : ""} onClick={() => update({ start: "hardware" })}>{t("Partir du matériel", "Start from hardware")}</button>
+            <button type="button" role="radio" aria-checked={loadFirst} className={loadFirst ? "on" : ""} onClick={() => { update({ start: "load" }); setObjective("load"); selectTab("sizing"); }}>{t("Partir de la charge", "Start from load")}</button>
+          </div>
+        </div>
         <div className="header-side">
           <PrefsToggles />
           <p className="config-path" title={configPath}>
@@ -411,10 +417,6 @@ export function Estimator({ source, configPath, initial }: { source: ConfigSourc
         </div>
       </header>
 
-      <div className="start-selector" role="group" aria-label={t("Point de départ", "Starting point")}>
-        <button className={`btn${!loadFirst ? " primary" : ""}`} aria-pressed={!loadFirst} onClick={() => update({ start: "hardware" })}>{t("Partir du matériel", "Start from hardware")}</button>
-        <button className={`btn${loadFirst ? " primary" : ""}`} aria-pressed={loadFirst} onClick={() => { update({ start: "load" }); setObjective("load"); selectTab("sizing"); }}>{t("Partir de la charge", "Start from load")}</button>
-      </div>
       <main className={`layout${loadFirst ? " load-first" : ""}`}>
         {/* ------------------------------------------------ Parameters */}
         <section className="panel form" aria-label={t("Paramètres", "Settings")}>

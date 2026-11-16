@@ -70,7 +70,8 @@
 }
 
 /* Unified sizing and the load-first entry path. */
-.start-selector { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.header-main { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.start-selector button { font-size: 13px; font-weight: 600; padding: 4px 12px; }
 .hardware-settings > summary { cursor: pointer; margin-bottom: 12px; }
 .hardware-settings:not([open]) { margin-top: 16px; }
 .unified-sizing select { max-width: 100%; padding: 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel); color: var(--text); }
@@ -212,8 +213,8 @@ h2 {
 
 .form {
   min-width: 0;
-  /* Leave room for the header and entry selector before the page scrolls. */
-  max-height: calc(100dvh - 160px);
+  /* Leave room for the header (title and entry selector) before the page scrolls. */
+  max-height: calc(100dvh - 120px);
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
